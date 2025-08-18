@@ -15,7 +15,7 @@ source.dir = .
 # (list) Application requirements (comma-separated)
 # Avoid adding build-time tools like "buildozer" or "python-for-android" 
 # unless your app actually imports them at runtime.
-requirements = python3,kivy,pyjnius,pillow,requests
+requirements = python3,kivy,kivymd,pandas,openpyxl,xlrd
 source.include_exts = py,kv,png,jpg,ttf,atlas,json
 
 # (str) The entry point of your application (the main Python file)
@@ -23,7 +23,7 @@ entrypoint = main.py
 
 # (list) Permissions required by the application (e.g. INTERNET, ACCESS_FINE_LOCATION)
 # Leave empty if not needed.
-android.permissions = INTERNET
+android.permissions = INTERNET, READ_EXTERNAL_STORAGE, WRITE_EXTERNAL_STORAGE
 
 # (int) Android API to target. 33 is currently stable for Android 13.
 android.api = 33
