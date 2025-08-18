@@ -22,11 +22,18 @@ from urllib.parse import quote_plus
 
 # Android-specific imports
 if platform == 'android':
-    from android.permissions import request_permissions, Permission
-    from jnius import autoclass, cast
-    PythonActivity = autoclass('org.kivy.android.PythonActivity')
-    Intent = autoclass('android.content.Intent')
-    Uri = autoclass('android.net.Uri')
+    try:
+        from android.permissions import request_permissions, Permission
+        from jnius import autoclass, cast
+        PythonActivity = autoclass('org.kivy.android.PythonActivity')
+        Intent = autoclass('android.content.Intent')
+        Uri = autoclass('android.net.Uri')
+        ANDROID_AVAILABLE = True
+    except ImportError:
+        ANDROID_AVAILABLE = False
+        print("Android modules not available")
+else:
+    ANDROID_AVAILABLE = False
 
 
 class AddressScreen(MDScreen):
@@ -39,7 +46,7 @@ class AddressScreen(MDScreen):
         self.dialog = None
         
         # Request permissions on Android
-        if platform == 'android':
+        if platform == 'android' and ANDROID_AVAILABLE:
             Clock.schedule_once(self.request_android_permissions, 0.5)
         
         # Load completed addresses from file
@@ -81,11 +88,14 @@ class AddressScreen(MDScreen):
     
     def request_android_permissions(self, dt):
         """Request necessary permissions on Android"""
-        if platform == 'android':
-            request_permissions([
-                Permission.READ_EXTERNAL_STORAGE,
-                Permission.WRITE_EXTERNAL_STORAGE
-            ])
+        if platform == 'android' and ANDROID_AVAILABLE:
+            try:
+                request_permissions([
+                    Permission.READ_EXTERNAL_STORAGE,
+                    Permission.WRITE_EXTERNAL_STORAGE
+                ])
+            except Exception as e:
+                print(f"Permission request failed: {e}")
     
     def init_file_manager(self):
         self.file_manager = MDFileManager(
@@ -218,7 +228,7 @@ class AddressScreen(MDScreen):
             # Encode address for URL
             encoded_address = quote_plus(str(address))
             
-            if platform == 'android':
+            if platform == 'android' and ANDROID_AVAILABLE:
                 # Use Android intent to open Google Maps app directly
                 try:
                     # Try to open Google Maps app first
@@ -233,6 +243,7 @@ class AddressScreen(MDScreen):
                     toast(f"Opening navigation to: {address}")
                     
                 except Exception as e:
+                    print(f"Android intent failed: {e}")
                     # Fallback to browser if Maps app isn't available
                     maps_url = f"https://www.google.com/maps/search/{encoded_address}"
                     webbrowser.open(maps_url)
@@ -272,9 +283,13 @@ class AddressScreen(MDScreen):
         """Save completed addresses to file"""
         try:
             # Use app's private directory on Android
-            if platform == 'android':
-                app_path = PythonActivity.mActivity.getFilesDir().getAbsolutePath()
-                file_path = os.path.join(app_path, self.completion_file)
+            if platform == 'android' and ANDROID_AVAILABLE:
+                try:
+                    app_path = PythonActivity.mActivity.getFilesDir().getAbsolutePath()
+                    file_path = os.path.join(app_path, self.completion_file)
+                except:
+                    # Fallback if Android methods fail
+                    file_path = self.completion_file
             else:
                 file_path = self.completion_file
                 
@@ -287,9 +302,13 @@ class AddressScreen(MDScreen):
         """Load completed addresses from file"""
         try:
             # Use app's private directory on Android
-            if platform == 'android':
-                app_path = PythonActivity.mActivity.getFilesDir().getAbsolutePath()
-                file_path = os.path.join(app_path, self.completion_file)
+            if platform == 'android' and ANDROID_AVAILABLE:
+                try:
+                    app_path = PythonActivity.mActivity.getFilesDir().getAbsolutePath()
+                    file_path = os.path.join(app_path, self.completion_file)
+                except:
+                    # Fallback if Android methods fail
+                    file_path = self.completion_file
             else:
                 file_path = self.completion_file
                 
