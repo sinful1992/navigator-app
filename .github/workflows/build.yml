@@ -1,29 +1,27 @@
 name: Build APK
-
 on:
   push:
     branches:
       - main
   workflow_dispatch:
-
 jobs:
   build:
     runs-on: ubuntu-22.04
     steps:
       - name: Check Out Repository
         uses: actions/checkout@v4
-
+      
       - name: Set Up Java 17
         uses: actions/setup-java@v3
         with:
           distribution: temurin
           java-version: "17"
-
+      
       - name: Set Up Python
         uses: actions/setup-python@v4
         with:
           python-version: "3.9"
-
+      
       - name: Install System Dependencies
         run: |
           sudo dpkg --add-architecture i386
@@ -32,12 +30,25 @@ jobs:
             git zip unzip autoconf automake libtool libtool-bin autopoint m4 pkg-config \
             zlib1g-dev libffi-dev libssl-dev cmake python3 python3-pip \
             libstdc++6:i386 zlib1g:i386 libncurses5:i386
-
+      
       - name: Install Buildozer and Cython
         run: |
           pip install --upgrade pip
           pip install buildozer cython
-
+      
+      # Setup Android SDK and accept licenses
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          api-level: 33
+          build-tools: 30.0.3
+          
+      # Accept all SDK licenses
+      - name: Accept Android SDK Licenses
+        run: |
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
+          yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager "build-tools;30.0.3" || true
+      
       # Install the Android NDK and link it to the SDK
       - name: Setup Android NDK
         uses: nttld/setup-ndk@v1
@@ -45,13 +56,13 @@ jobs:
         with:
           ndk-version: r26d
           link-to-sdk: true
-
+      
       - name: Generate buildozer.spec if Missing
         run: |
           if [ ! -f buildozer.spec ]; then
             buildozer init
           fi
-
+      
       - name: Build APK (Debug)
         env:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
@@ -59,10 +70,10 @@ jobs:
           ANDROIDNDK: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: |
           buildozer -v android debug
-
+      
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: MyKivyApp-APK
+          name: AddressNavigator-APK
           path: bin/*.apk
           retention-days: 30
