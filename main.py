@@ -13,11 +13,20 @@ from kivymd.uix.filemanager import MDFileManager
 from kivymd.toast import toast
 from kivy.metrics import dp
 from kivy.clock import Clock
+from kivy.utils import platform
 import pandas as pd
 import webbrowser
 import os
 import json
 from urllib.parse import quote_plus
+
+# Android-specific imports
+if platform == 'android':
+    from android.permissions import request_permissions, Permission
+    from jnius import autoclass, cast
+    PythonActivity = autoclass('org.kivy.android.PythonActivity')
+    Intent = autoclass('android.content.Intent')
+    Uri = autoclass('android.net.Uri')
 
 
 class AddressScreen(MDScreen):
@@ -28,6 +37,10 @@ class AddressScreen(MDScreen):
         self.completion_file = "completed_addresses.json"
         self.file_manager = None
         self.dialog = None
+        
+        # Request permissions on Android
+        if platform == 'android':
+            Clock.schedule_once(self.request_android_permissions, 0.5)
         
         # Load completed addresses from file
         self.load_completed_addresses()
@@ -66,6 +79,14 @@ class AddressScreen(MDScreen):
         # Add initial message if no addresses loaded
         self.show_initial_message()
     
+    def request_android_permissions(self, dt):
+        """Request necessary permissions on Android"""
+        if platform == 'android':
+            request_permissions([
+                Permission.READ_EXTERNAL_STORAGE,
+                Permission.WRITE_EXTERNAL_STORAGE
+            ])
+    
     def init_file_manager(self):
         self.file_manager = MDFileManager(
             exit_manager=self.exit_manager,
@@ -73,15 +94,27 @@ class AddressScreen(MDScreen):
         )
     
     def open_file_manager(self):
-        # Try to open in Downloads folder first, fallback to root
-        try:
-            downloads_path = "/storage/emulated/0/Download"
-            if os.path.exists(downloads_path):
-                self.file_manager.show(downloads_path)
-            else:
-                self.file_manager.show("/")
-        except:
-            self.file_manager.show("/")
+        # Android-specific paths
+        if platform == 'android':
+            # Try multiple common Android paths
+            android_paths = [
+                "/storage/emulated/0/Download",
+                "/storage/emulated/0/Documents", 
+                "/sdcard/Download",
+                "/sdcard/Documents",
+                "/storage/emulated/0"
+            ]
+            
+            for path in android_paths:
+                if os.path.exists(path):
+                    self.file_manager.show(path)
+                    return
+                    
+            # Fallback to root if nothing found
+            self.file_manager.show("/storage/emulated/0")
+        else:
+            # Desktop/other platforms
+            self.file_manager.show(os.path.expanduser("~"))
     
     def select_path(self, path):
         """Handle file selection"""
@@ -184,15 +217,41 @@ class AddressScreen(MDScreen):
         try:
             # Encode address for URL
             encoded_address = quote_plus(str(address))
-            maps_url = f"https://www.google.com/maps/search/{encoded_address}"
             
-            # Open in browser (on Android this should open Google Maps app)
-            webbrowser.open(maps_url)
-            
-            toast(f"Opening navigation to: {address}")
-            
+            if platform == 'android':
+                # Use Android intent to open Google Maps app directly
+                try:
+                    # Try to open Google Maps app first
+                    maps_intent = Intent()
+                    maps_intent.setAction(Intent.ACTION_VIEW)
+                    maps_uri = Uri.parse(f"geo:0,0?q={encoded_address}")
+                    maps_intent.setData(maps_uri)
+                    
+                    current_activity = cast('android.app.Activity', PythonActivity.mActivity)
+                    current_activity.startActivity(maps_intent)
+                    
+                    toast(f"Opening navigation to: {address}")
+                    
+                except Exception as e:
+                    # Fallback to browser if Maps app isn't available
+                    maps_url = f"https://www.google.com/maps/search/{encoded_address}"
+                    webbrowser.open(maps_url)
+                    toast(f"Opening in browser: {address}")
+            else:
+                # Desktop/other platforms - use browser
+                maps_url = f"https://www.google.com/maps/search/{encoded_address}"
+                webbrowser.open(maps_url)
+                toast(f"Opening navigation to: {address}")
+                
         except Exception as e:
             toast(f"Error opening maps: {str(e)}")
+            # Fallback to browser
+            try:
+                maps_url = f"https://www.google.com/maps/search/{encoded_address}"
+                webbrowser.open(maps_url)
+                toast("Opened in web browser")
+            except:
+                toast("Unable to open navigation")
     
     def toggle_completion(self, index):
         """Toggle completion status of an address"""
@@ -212,7 +271,14 @@ class AddressScreen(MDScreen):
     def save_completed_addresses(self):
         """Save completed addresses to file"""
         try:
-            with open(self.completion_file, 'w') as f:
+            # Use app's private directory on Android
+            if platform == 'android':
+                app_path = PythonActivity.mActivity.getFilesDir().getAbsolutePath()
+                file_path = os.path.join(app_path, self.completion_file)
+            else:
+                file_path = self.completion_file
+                
+            with open(file_path, 'w') as f:
                 json.dump(list(self.completed_addresses), f)
         except Exception as e:
             print(f"Error saving completion data: {e}")
@@ -220,8 +286,15 @@ class AddressScreen(MDScreen):
     def load_completed_addresses(self):
         """Load completed addresses from file"""
         try:
-            if os.path.exists(self.completion_file):
-                with open(self.completion_file, 'r') as f:
+            # Use app's private directory on Android
+            if platform == 'android':
+                app_path = PythonActivity.mActivity.getFilesDir().getAbsolutePath()
+                file_path = os.path.join(app_path, self.completion_file)
+            else:
+                file_path = self.completion_file
+                
+            if os.path.exists(file_path):
+                with open(file_path, 'r') as f:
                     completed_list = json.load(f)
                     self.completed_addresses = set(completed_list)
         except Exception as e:
