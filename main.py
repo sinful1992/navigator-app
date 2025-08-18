@@ -19,7 +19,14 @@ import webbrowser
 import os
 import json
 from urllib.parse import quote_plus
-from openpyxl import load_workbook
+
+# Try to import openpyxl, fallback if not available
+try:
+    from openpyxl import load_workbook
+    OPENPYXL_AVAILABLE = True
+except ImportError:
+    OPENPYXL_AVAILABLE = False
+    print("openpyxl not available, Excel support disabled")
 
 # Android-specific imports
 if platform == 'android':
@@ -99,43 +106,65 @@ class AddressScreen(MDScreen):
                 print(f"Permission request failed: {e}")
     
     def init_file_manager(self):
-        self.file_manager = MDFileManager(
-            exit_manager=self.exit_manager,
-            select_path=self.select_path,
-        )
+        try:
+            self.file_manager = MDFileManager(
+                exit_manager=self.exit_manager,
+                select_path=self.select_path,
+            )
+        except Exception as e:
+            print(f"Error initializing file manager: {e}")
+            self.file_manager = None
     
     def open_file_manager(self):
-        # Android-specific paths
-        if platform == 'android':
-            # Try multiple common Android paths
-            android_paths = [
-                "/storage/emulated/0/Download",
-                "/storage/emulated/0/Documents", 
-                "/sdcard/Download",
-                "/sdcard/Documents",
-                "/storage/emulated/0"
-            ]
+        if self.file_manager is None:
+            toast("File manager not available")
+            return
             
-            for path in android_paths:
-                if os.path.exists(path):
-                    self.file_manager.show(path)
-                    return
-                    
-            # Fallback to root if nothing found
-            self.file_manager.show("/storage/emulated/0")
-        else:
-            # Desktop/other platforms
-            self.file_manager.show(os.path.expanduser("~"))
+        try:
+            # Android-specific paths
+            if platform == 'android':
+                # Try multiple common Android paths
+                android_paths = [
+                    "/storage/emulated/0/Download",
+                    "/storage/emulated/0/Documents", 
+                    "/sdcard/Download",
+                    "/sdcard/Documents",
+                    "/storage/emulated/0"
+                ]
+                
+                for path in android_paths:
+                    if os.path.exists(path):
+                        self.file_manager.show(path)
+                        return
+                        
+                # Fallback to root if nothing found
+                self.file_manager.show("/storage/emulated/0")
+            else:
+                # Desktop/other platforms
+                self.file_manager.show(os.path.expanduser("~"))
+        except Exception as e:
+            toast(f"Error opening file browser: {str(e)}")
+            print(f"File manager error: {e}")
     
     def select_path(self, path):
         """Handle file selection"""
-        self.exit_manager()
-        if path.lower().endswith(('.xlsx', '.xls')):
-            self.load_xlsx_file(path)
-        elif path.lower().endswith('.csv'):
-            self.load_csv_file(path)
-        else:
-            toast("Please select an Excel file (.xlsx, .xls) or CSV file")
+        try:
+            self.exit_manager()
+            if path.lower().endswith(('.xlsx', '.xls')):
+                if OPENPYXL_AVAILABLE:
+                    self.load_xlsx_file(path)
+                else:
+                    toast("Excel support not available. Please use CSV files.")
+            elif path.lower().endswith('.csv'):
+                self.load_csv_file(path)
+            else:
+                if OPENPYXL_AVAILABLE:
+                    toast("Please select an Excel file (.xlsx, .xls) or CSV file")
+                else:
+                    toast("Please select a CSV file")
+        except Exception as e:
+            toast(f"Error selecting file: {str(e)}")
+            print(f"File selection error: {e}")
     
     def exit_manager(self, *args):
         """Close file manager"""
@@ -143,6 +172,10 @@ class AddressScreen(MDScreen):
     
     def load_xlsx_file(self, file_path):
         """Load addresses from XLSX file using openpyxl"""
+        if not OPENPYXL_AVAILABLE:
+            toast("Excel support not available")
+            return
+            
         try:
             # Load workbook
             workbook = load_workbook(file_path, read_only=True)
@@ -169,14 +202,15 @@ class AddressScreen(MDScreen):
             if address_column_idx is None:
                 # Use first column if no address column found
                 address_column_idx = 0
-                toast(f"Using column '{headers[0]}' as addresses")
+                if headers[0]:
+                    toast(f"Using column '{headers[0]}' as addresses")
             
             # Extract addresses from remaining rows
             self.addresses = []
             for row in rows[1:]:  # Skip header row
                 if len(row) > address_column_idx and row[address_column_idx].value:
                     address = str(row[address_column_idx].value).strip()
-                    if address:
+                    if address and address.lower() != 'none':
                         self.addresses.append(address)
             
             workbook.close()
@@ -189,6 +223,7 @@ class AddressScreen(MDScreen):
                 
         except Exception as e:
             toast(f"Error loading Excel file: {str(e)}")
+            print(f"Excel loading error: {e}")
     
     def load_csv_file(self, file_path):
         """Load addresses from CSV file"""
@@ -414,8 +449,14 @@ class AddressScreen(MDScreen):
                 spacing=dp(20)
             )
             
+            # Adjust message based on available features
+            if OPENPYXL_AVAILABLE:
+                message_text = "Welcome to Address Navigator!\n\nTap the folder icon to load an Excel (.xlsx) or CSV file with addresses."
+            else:
+                message_text = "Welcome to Address Navigator!\n\nTap the folder icon to load a CSV file with addresses."
+            
             message_label = MDLabel(
-                text="Welcome to Address Navigator!\n\nTap the folder icon to load an Excel (.xlsx) or CSV file with addresses.",
+                text=message_text,
                 theme_text_color="Primary",
                 halign="center",
                 text_size=(dp(260), None)
@@ -438,18 +479,35 @@ class AddressScreen(MDScreen):
 
 class AddressNavigatorApp(MDApp):
     def build(self):
-        self.title = "Address Navigator"
-        self.theme_cls.theme_style = "Light"
-        self.theme_cls.primary_palette = "Blue"
-        
-        # Create screen manager
-        sm = MDScreenManager()
-        
-        # Add address screen
-        address_screen = AddressScreen(name="address_screen")
-        sm.add_widget(address_screen)
-        
-        return sm
+        try:
+            self.title = "Address Navigator"
+            self.theme_cls.theme_style = "Light"
+            self.theme_cls.primary_palette = "Blue"
+            
+            print("App starting...")
+            
+            # Create screen manager
+            sm = MDScreenManager()
+            
+            # Add address screen
+            address_screen = AddressScreen(name="address_screen")
+            sm.add_widget(address_screen)
+            
+            print("App built successfully")
+            return sm
+            
+        except Exception as e:
+            print(f"Error building app: {e}")
+            # Return a simple fallback screen
+            from kivymd.uix.label import MDLabel
+            return MDLabel(text=f"Error starting app: {str(e)}")
+    
+    def on_start(self):
+        """Called when the app starts"""
+        try:
+            print("App started successfully")
+        except Exception as e:
+            print(f"Error on start: {e}")
 
 
 if __name__ == "__main__":
