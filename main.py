@@ -14,11 +14,12 @@ from kivymd.toast import toast
 from kivy.metrics import dp
 from kivy.clock import Clock
 from kivy.utils import platform
-import pandas as pd
+import csv
 import webbrowser
 import os
 import json
 from urllib.parse import quote_plus
+from openpyxl import load_workbook
 
 # Android-specific imports
 if platform == 'android':
@@ -131,35 +132,54 @@ class AddressScreen(MDScreen):
         self.exit_manager()
         if path.lower().endswith(('.xlsx', '.xls')):
             self.load_xlsx_file(path)
+        elif path.lower().endswith('.csv'):
+            self.load_csv_file(path)
         else:
-            toast("Please select an Excel file (.xlsx or .xls)")
+            toast("Please select an Excel file (.xlsx, .xls) or CSV file")
     
     def exit_manager(self, *args):
         """Close file manager"""
         self.file_manager.close()
     
     def load_xlsx_file(self, file_path):
-        """Load addresses from XLSX file"""
+        """Load addresses from XLSX file using openpyxl"""
         try:
-            # Read the Excel file
-            df = pd.read_excel(file_path)
+            # Load workbook
+            workbook = load_workbook(file_path, read_only=True)
+            worksheet = workbook.active
             
-            # Look for address column (try common names)
-            address_column = None
+            # Get all rows
+            rows = list(worksheet.rows)
+            if not rows:
+                toast("No data found in the file")
+                return
+            
+            # Get headers from first row
+            headers = [cell.value for cell in rows[0]]
+            
+            # Look for address column
+            address_column_idx = None
             possible_names = ['address', 'Address', 'ADDRESS', 'street', 'Street', 'location', 'Location']
             
-            for col_name in possible_names:
-                if col_name in df.columns:
-                    address_column = col_name
+            for i, header in enumerate(headers):
+                if header and str(header).strip() in possible_names:
+                    address_column_idx = i
                     break
             
-            if address_column is None:
-                # If no standard column found, use the first column
-                address_column = df.columns[0]
-                toast(f"Using column '{address_column}' as addresses")
+            if address_column_idx is None:
+                # Use first column if no address column found
+                address_column_idx = 0
+                toast(f"Using column '{headers[0]}' as addresses")
             
-            # Extract addresses and remove NaN values
-            self.addresses = df[address_column].dropna().tolist()
+            # Extract addresses from remaining rows
+            self.addresses = []
+            for row in rows[1:]:  # Skip header row
+                if len(row) > address_column_idx and row[address_column_idx].value:
+                    address = str(row[address_column_idx].value).strip()
+                    if address:
+                        self.addresses.append(address)
+            
+            workbook.close()
             
             if self.addresses:
                 self.create_address_buttons()
@@ -168,7 +188,56 @@ class AddressScreen(MDScreen):
                 toast("No addresses found in the file")
                 
         except Exception as e:
-            toast(f"Error loading file: {str(e)}")
+            toast(f"Error loading Excel file: {str(e)}")
+    
+    def load_csv_file(self, file_path):
+        """Load addresses from CSV file"""
+        try:
+            with open(file_path, 'r', encoding='utf-8') as csvfile:
+                # Detect delimiter
+                sample = csvfile.read(1024)
+                csvfile.seek(0)
+                sniffer = csv.Sniffer()
+                delimiter = sniffer.sniff(sample).delimiter
+                
+                reader = csv.reader(csvfile, delimiter=delimiter)
+                rows = list(reader)
+                
+                if not rows:
+                    toast("No data found in the file")
+                    return
+                
+                # Get headers
+                headers = rows[0]
+                
+                # Look for address column
+                address_column_idx = None
+                possible_names = ['address', 'Address', 'ADDRESS', 'street', 'Street', 'location', 'Location']
+                
+                for i, header in enumerate(headers):
+                    if header.strip() in possible_names:
+                        address_column_idx = i
+                        break
+                
+                if address_column_idx is None:
+                    # Use first column if no address column found
+                    address_column_idx = 0
+                    toast(f"Using column '{headers[0]}' as addresses")
+                
+                # Extract addresses
+                self.addresses = []
+                for row in rows[1:]:  # Skip header
+                    if len(row) > address_column_idx and row[address_column_idx].strip():
+                        self.addresses.append(row[address_column_idx].strip())
+                
+                if self.addresses:
+                    self.create_address_buttons()
+                    toast(f"Loaded {len(self.addresses)} addresses")
+                else:
+                    toast("No addresses found in the file")
+                    
+        except Exception as e:
+            toast(f"Error loading CSV file: {str(e)}")
     
     def create_address_buttons(self):
         """Create buttons for each address"""
@@ -346,14 +415,14 @@ class AddressScreen(MDScreen):
             )
             
             message_label = MDLabel(
-                text="Welcome to Address Navigator!\n\nTap the folder icon in the toolbar to load an Excel file with addresses.",
+                text="Welcome to Address Navigator!\n\nTap the folder icon to load an Excel (.xlsx) or CSV file with addresses.",
                 theme_text_color="Primary",
                 halign="center",
                 text_size=(dp(260), None)
             )
             
             load_button = MDRaisedButton(
-                text="Load Excel File",
+                text="Load File",
                 size_hint=(None, None),
                 size=(dp(200), dp(40)),
                 pos_hint={"center_x": 0.5},
