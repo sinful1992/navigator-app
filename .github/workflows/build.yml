@@ -13,42 +13,74 @@ jobs:
     env:
       ANDROID_SDK_ROOT: /opt/android-sdk
       ANDROID_HOME: /opt/android-sdk
-      PATH: /opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/platform-tools:$PATH
+      PATH: /opt/android-sdk/build-tools/35.0.0:/opt/android-sdk/platform-tools:/opt/android-sdk/cmdline-tools/latest/bin:$PATH
 
     steps:
+      # 1) Ensure tools required by checkout exist inside the container
+      - name: Bootstrap container tools
+        run: |
+          apt-get update -y
+          apt-get install -y git tar wget unzip python3 python3-pip ca-certificates
+          git --version
+          tar --version
+          python3 --version
+          pip3 --version
+
+      # 2) Check out your repo (will use git now, not REST tarball)
       - name: Check Out Repository
         uses: actions/checkout@v4
 
+      # 3) Buildozer & Python deps (use container's Python to avoid GLIBC mismatch)
       - name: Install Buildozer & Cython
         run: |
           python3 -m pip install --upgrade pip
-          pip3 install buildozer==1.5.0 cython
+          pip3 install buildozer==1.5.0 cython wheel
 
-      - name: Install Android SDK packages
+      # 4) Android cmdline-tools + accept licenses + install SDK/Build-Tools/NDK
+      - name: Install Android SDK packages (API 35, Build-Tools 35.0.0, NDK r26d)
         run: |
-          mkdir -p /opt/android-sdk/cmdline-tools
-          cd /opt/android-sdk
-          wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
-          unzip -q commandlinetools-linux-11076708_latest.zip -d cmdline-tools
-          mv cmdline-tools/cmdline-tools cmdline-tools/latest
-          printf 'y\n%.0s' {1..30} | sdkmanager --licenses
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
+          cd "$ANDROID_SDK_ROOT"
+          # Install cmdline-tools if not present
+          if [ ! -d "cmdline-tools/latest" ]; then
+            wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+            unzip -q commandlinetools-linux-11076708_latest.zip -d cmdline-tools
+            mv cmdline-tools/cmdline-tools cmdline-tools/latest
+          fi
 
-      - name: Patch buildozer.spec (ensure 35.0.0 is pinned)
+          # License acceptance (portable; avoids `yes`)
+          printf 'y\n%.0s' {1..40} | sdkmanager --licenses
+
+          # Required packages
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;26.1.10909125"
+
+          # Export NDK paths for later steps
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.1.10909125" >> $GITHUB_ENV
+          echo "ANDROIDNDK=$ANDROID_SDK_ROOT/ndk/26.1.10909125" >> $GITHUB_ENV
+
+      # 5) Pin Build-Tools version & clean stale state
+      - name: Patch buildozer.spec and clean
         run: |
+          # Ensure build-tools pin (prevents Build-Tools 36 request)
           sed -i 's/^android.build_tools_version *= *.*/android.build_tools_version = 35.0.0/' buildozer.spec
           sed -i '/^android.gradle_build_tools *= *.*/d' buildozer.spec
 
-      - name: Clean Previous Build
-        run: |
+          # (Optional) Ensure api is 35 if missing
+          grep -q '^android.api' buildozer.spec || echo 'android.api = 35' >> buildozer.spec
+
           rm -rf .buildozer bin
 
+      # 6) Build APK
       - name: Build APK (Debug)
         run: |
+          # Ensure the PATH prioritizes AIDL from 35.0.0
+          export PATH="$ANDROID_SDK_ROOT/build-tools/35.0.0:$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH"
           buildozer -v android debug
 
+      # 7) Upload artifact
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: AddressNavigator-APK-2025
           path: bin/*.apk
+          retention-days: 30
