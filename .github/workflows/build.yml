@@ -4,9 +4,17 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+defaults:
+  run:
+    shell: bash
+
 jobs:
   build:
     runs-on: ubuntu-22.04
+    env:
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      PATH: /usr/local/lib/android/sdk/cmdline-tools/latest/bin:/usr/local/lib/android/sdk/platform-tools:${PATH}
 
     steps:
       - name: Check Out Repository
@@ -39,20 +47,23 @@ jobs:
 
       - name: Install Android cmdline-tools
         run: |
-          mkdir -p /usr/local/lib/android/sdk
-          cd /usr/local/lib/android/sdk
+          sudo mkdir -p "$ANDROID_SDK_ROOT"
+          sudo chown -R "$USER:$USER" "$ANDROID_SDK_ROOT"
+          cd "$ANDROID_SDK_ROOT"
           wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
           unzip -q commandlinetools-linux-11076708_latest.zip
           mkdir -p cmdline-tools/latest
           mv cmdline-tools/* cmdline-tools/latest/ || true
 
-      - name: Install Android SDK Packages (API 35 + Build-Tools 35.0.0)
-        env:
-          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
-          ANDROID_HOME: /usr/local/lib/android/sdk
-          PATH: /usr/local/lib/android/sdk/cmdline-tools/latest/bin:/usr/local/lib/android/sdk/platform-tools:${PATH}
+      - name: Accept Android SDK licenses
         run: |
-          yes | sdkmanager --licenses
+          command -v sdkmanager || { echo "sdkmanager not in PATH"; exit 1; }
+          sdkmanager --version
+          # Feed 'y' answers without relying on `yes`
+          printf 'y\n%.0s' {1..20} | sdkmanager --licenses
+
+      - name: Install Android SDK packages (API 35 + Build-Tools 35.0.0)
+        run: |
           sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
       - name: Set Up Android NDK r26d
@@ -64,8 +75,6 @@ jobs:
 
       - name: Export Env (pin aidl path to 35.0.0)
         run: |
-          echo "ANDROID_SDK_ROOT=/usr/local/lib/android/sdk" >> $GITHUB_ENV
-          echo "ANDROID_HOME=/usr/local/lib/android/sdk" >> $GITHUB_ENV
           echo "ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> $GITHUB_ENV
           echo "ANDROIDNDK=${{ steps.setup-ndk.outputs.ndk-path }}" >> $GITHUB_ENV
           echo "PATH=/usr/local/lib/android/sdk/build-tools/35.0.0:/usr/local/lib/android/sdk/platform-tools:/usr/local/lib/android/sdk/cmdline-tools/latest/bin:$PATH" >> $GITHUB_ENV
