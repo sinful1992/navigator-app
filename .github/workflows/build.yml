@@ -12,13 +12,12 @@ jobs:
   build:
     runs-on: ubuntu-22.04
 
-    # Do NOT set PATH at the job level (it can hide git/tar for checkout)
     env:
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
       ANDROID_HOME: /usr/local/lib/android/sdk
 
     steps:
-      # 0) Ensure checkout can use git (avoid REST+tar fallback)
+      # 0) Ensure checkout uses git (avoid REST+tar fallback)
       - name: Ensure git & tar (pre-checkout)
         run: |
           set -euxo pipefail
@@ -30,7 +29,7 @@ jobs:
       - name: Check Out Repository
         uses: actions/checkout@v4
 
-      # 1) Java & Python per Buildozer docs (JDK 17; Python ≥3.8)
+      # 1) Java & Python
       - name: Set Up Java 17
         uses: actions/setup-java@v4
         with:
@@ -55,7 +54,7 @@ jobs:
             automake libtool-bin autopoint m4 build-essential \
             patch rsync
 
-      # 3) Buildozer & Cython (pin Cython==0.29.33 per docs/community)
+      # 3) Buildozer & Cython (pin Cython to avoid 3.x issues)
       - name: Install Buildozer & Cython
         run: |
           set -euxo pipefail
@@ -93,15 +92,24 @@ jobs:
           echo "$ANDROID_SDK_ROOT/platform-tools" >> $GITHUB_PATH
           echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> $GITHUB_PATH
 
-      # 7) NDK r26d (p4a-compatible)
-      - name: Set Up Android NDK r26d
+      # 6.1) p4a compatibility: create legacy tools/bin pointing to cmdline-tools
+      - name: Create legacy tools/bin for sdkmanager (p4a compatibility)
+        run: |
+          set -euxo pipefail
+          mkdir -p "$ANDROID_SDK_ROOT/tools/bin"
+          ln -sf "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" "$ANDROID_SDK_ROOT/tools/bin/sdkmanager"
+          ln -sf "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin/avdmanager" "$ANDROID_SDK_ROOT/tools/bin/avdmanager"
+          ls -l "$ANDROID_SDK_ROOT/tools/bin"
+
+      # 7) NDK r25b (p4a "recommended")
+      - name: Set Up Android NDK r25b
         uses: nttld/setup-ndk@v1
         id: setup-ndk
         with:
-          ndk-version: r26d
+          ndk-version: r25b
           link-to-sdk: true
 
-      # 8) Tell p4a EXACTLY where the SDK/NDK are (prevents fallback to ~/.buildozer internal SDK)
+      # 8) Tell p4a EXACTLY where the SDK/NDK are
       - name: Wire SDK/NDK env for p4a
         run: |
           set -euxo pipefail
