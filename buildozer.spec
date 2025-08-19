@@ -16,7 +16,6 @@ android.ndk_api = 24
 android.permissions = INTERNET,READ_EXTERNAL_STORAGE,WRITE_EXTERNAL_STORAGE,READ_MEDIA_IMAGES,READ_MEDIA_VIDEO,READ_MEDIA_AUDIO
 
 # Latest build tools
-android.gradle_build_tools = 35.0.0
 android.build_tools_version = 35.0.0
 
 orientation = portrait
