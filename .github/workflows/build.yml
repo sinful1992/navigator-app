@@ -4,95 +4,44 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
-defaults:
-  run:
-    shell: bash
-
 jobs:
   build:
-    runs-on: ubuntu-22.04
-    env:
-      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
-      ANDROID_HOME: /usr/local/lib/android/sdk
-      PATH: /usr/local/lib/android/sdk/cmdline-tools/latest/bin:/usr/local/lib/android/sdk/platform-tools:${PATH}
+    runs-on: ubuntu-latest
+    container:
+      image: reactnativecommunity/react-native-android:latest
 
     steps:
-      # Ensure tools required by actions/checkout
-      - name: Ensure git and tar for checkout
-        run: |
-          sudo apt-get update -y
-          sudo apt-get install -y git tar ca-certificates
-          git --version
-          tar --version
-
       - name: Check Out Repository
         uses: actions/checkout@v4
-
-      - name: Set Up Java 17 (recommended for AGP)
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
 
       - name: Set Up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Install System Dependencies
-        run: |
-          sudo dpkg --add-architecture i386
-          sudo apt-get update -y
-          sudo apt-get install -y \
-            zip unzip autoconf automake libtool libtool-bin autopoint m4 pkg-config \
-            zlib1g-dev libffi-dev libssl-dev cmake python3 python3-pip \
-            libstdc++6:i386 zlib1g:i386 libncurses6:i386 libtinfo6:i386
-
       - name: Install Buildozer & Cython
         run: |
           python -m pip install --upgrade pip
-          pip install "buildozer==1.5.0" cython
+          pip install buildozer==1.5.0 cython
 
-      - name: Install Android cmdline-tools
+      - name: Install Android SDK packages
+        env:
+          ANDROID_SDK_ROOT: /opt/android-sdk
+          ANDROID_HOME: /opt/android-sdk
+          PATH: /opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/platform-tools:$PATH
         run: |
-          sudo mkdir -p "$ANDROID_SDK_ROOT"
-          sudo chown -R "$USER:$USER" "$ANDROID_SDK_ROOT"
-          cd "$ANDROID_SDK_ROOT"
           wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
-          unzip -q commandlinetools-linux-11076708_latest.zip
-          mkdir -p cmdline-tools/latest
-          mv cmdline-tools/* cmdline-tools/latest/ || true
-
-      - name: Accept Android SDK licenses
-        run: |
-          command -v sdkmanager || { echo "sdkmanager not in PATH"; exit 1; }
-          sdkmanager --version
-          # Answer 'y' to all prompts without relying on `yes`
-          printf 'y\n%.0s' {1..30} | sdkmanager --licenses
-
-      - name: Install Android SDK packages (API 35 + Build-Tools 35.0.0)
-        run: |
+          unzip -q commandlinetools-linux-11076708_latest.zip -d /opt/android-sdk/cmdline-tools
+          mv /opt/android-sdk/cmdline-tools/cmdline-tools /opt/android-sdk/cmdline-tools/latest
+          yes | sdkmanager --licenses
           sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
-      - name: Set Up Android NDK r26d
-        uses: nttld/setup-ndk@v1
-        id: setup-ndk
-        with:
-          ndk-version: r26d
-          link-to-sdk: true
-
-      - name: Export Env (pin aidl path to 35.0.0)
-        run: |
-          echo "ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> $GITHUB_ENV
-          echo "ANDROIDNDK=${{ steps.setup-ndk.outputs.ndk-path }}" >> $GITHUB_ENV
-          echo "PATH=/usr/local/lib/android/sdk/build-tools/35.0.0:/usr/local/lib/android/sdk/platform-tools:/usr/local/lib/android/sdk/cmdline-tools/latest/bin:$PATH" >> $GITHUB_ENV
-
-      - name: Patch buildozer.spec (ensure 35.0.0 is pinned; remove unknown key)
+      - name: Patch buildozer.spec (ensure 35.0.0 is pinned)
         run: |
           sed -i 's/^android.build_tools_version *= *.*/android.build_tools_version = 35.0.0/' buildozer.spec
           sed -i '/^android.gradle_build_tools *= *.*/d' buildozer.spec
 
-      - name: Clean Previous Build (avoids stale state)
+      - name: Clean Previous Build
         run: |
           rm -rf .buildozer bin
 
@@ -105,4 +54,3 @@ jobs:
         with:
           name: AddressNavigator-APK-2025
           path: bin/*.apk
-          retention-days: 30
