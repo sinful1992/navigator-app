@@ -29,7 +29,7 @@ jobs:
       - name: Check Out Repository
         uses: actions/checkout@v4
 
-      # 1) Java & Python (Buildozer tests on >=3.8; JDK 17 per docs)
+      # 1) Java & Python
       - name: Set Up Java 17
         uses: actions/setup-java@v4
         with:
@@ -41,21 +41,20 @@ jobs:
         with:
           python-version: "3.11"
 
-      # 2) System deps (from Buildozer docs + safe extras)
+      # 2) System dependencies (from Buildozer docs + safe extras)
       - name: Install System Dependencies
         run: |
           set -euxo pipefail
           sudo apt-get update -y
           sudo apt-get install -y \
-            git zip unzip wget curl ca-certificates \
-            openjdk-17-jdk \
+            zip unzip wget curl ca-certificates \
             autoconf libtool pkg-config zlib1g-dev \
             libncurses5-dev libncursesw5-dev libtinfo5 \
             cmake libffi-dev libssl-dev \
             automake libtool-bin autopoint m4 build-essential \
             patch rsync
 
-      # 3) Buildozer & Cython (pin Cython==0.29.33 per docs)
+      # 3) Buildozer & Cython (Cython pinned per docs)
       - name: Install Buildozer & Cython
         run: |
           set -euxo pipefail
@@ -74,7 +73,7 @@ jobs:
           mkdir -p cmdline-tools/latest
           mv cmdline-tools/* cmdline-tools/latest/ || true
 
-      # 5) Licenses & SDK components (API 35 + Build-Tools 35.0.0)
+      # 5) Accept licenses (explicit, non-interactive)
       - name: Accept Android SDK licenses
         run: |
           set -euxo pipefail
@@ -82,6 +81,7 @@ jobs:
           sdkmanager --version
           printf 'y\n%.0s' {1..60} | sdkmanager --licenses
 
+      # 6) Install required SDK packages (API 35 + Build-Tools 35.0.0)
       - name: Install Android SDK packages
         run: |
           set -euxo pipefail
@@ -92,7 +92,7 @@ jobs:
           echo "$ANDROID_SDK_ROOT/platform-tools" >> $GITHUB_PATH
           echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> $GITHUB_PATH
 
-      # 6) NDK r26d (p4a-compatible)
+      # 7) NDK r26d (p4a-compatible)
       - name: Set Up Android NDK r26d
         uses: nttld/setup-ndk@v1
         id: setup-ndk
@@ -106,7 +106,7 @@ jobs:
           echo "ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> $GITHUB_ENV
           echo "ANDROIDNDK=${{ steps.setup-ndk.outputs.ndk-path }}" >> $GITHUB_ENV
 
-      # 7) Spec hygiene & clean
+      # 8) Spec hygiene & clean
       - name: Patch buildozer.spec and clean
         run: |
           set -euxo pipefail
@@ -118,7 +118,7 @@ jobs:
           grep -q '^android.api' buildozer.spec || echo 'android.api = 35' >> buildozer.spec
           rm -rf .buildozer bin
 
-      # 8) Build APK
+      # 9) Build APK
       - name: Build APK (Debug)
         run: |
           set -euxo pipefail
@@ -129,7 +129,7 @@ jobs:
           which aapt2 || true
           buildozer -v android debug
 
-      # 9) Upload artifact
+      # 10) Upload artifact
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
