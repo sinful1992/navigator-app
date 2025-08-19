@@ -1,28 +1,29 @@
 name: Build APK
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
   workflow_dispatch:
+
 jobs:
   build:
-    runs-on: ubuntu-22.04  # Stay with 22.04 for better compatibility
+    runs-on: ubuntu-22.04
+
     steps:
       - name: Check Out Repository
         uses: actions/checkout@v4
-        
-      - name: Set Up Java 21
+
+      - name: Set Up Java 17 (recommended for AGP)
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "21"
-          
+          java-version: "17"
+
       - name: Set Up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          
-      - name: Install System Dependencies (Updated for 2025)
+
+      - name: Install System Dependencies
         run: |
           sudo dpkg --add-architecture i386
           sudo apt-get update -y
@@ -30,45 +31,58 @@ jobs:
             git zip unzip autoconf automake libtool libtool-bin autopoint m4 pkg-config \
             zlib1g-dev libffi-dev libssl-dev cmake python3 python3-pip \
             libstdc++6:i386 zlib1g:i386 libncurses6:i386 libtinfo6:i386
-            
-      - name: Install Latest Buildozer
+
+      - name: Install Buildozer & Cython
         run: |
-          pip install --upgrade pip
-          pip install buildozer==1.5.0 cython
-          
-      - name: Setup Android SDK (API 35)
+          python -m pip install --upgrade pip
+          pip install "buildozer==1.5.0" cython
+
+      - name: Install Android cmdline-tools
         run: |
+          mkdir -p /usr/local/lib/android/sdk
+          cd /usr/local/lib/android/sdk
           wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
           unzip -q commandlinetools-linux-11076708_latest.zip
-          sudo mkdir -p /usr/local/lib/android/sdk/cmdline-tools
-          sudo mv cmdline-tools /usr/local/lib/android/sdk/cmdline-tools/latest
-          
-      - name: Setup Android SDK Tools (Latest)
+          mkdir -p cmdline-tools/latest
+          mv cmdline-tools/* cmdline-tools/latest/ || true
+
+      - name: Install Android SDK Packages (API 35 + Build-Tools 35.0.0)
+        env:
+          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+          ANDROID_HOME: /usr/local/lib/android/sdk
+          PATH: /usr/local/lib/android/sdk/cmdline-tools/latest/bin:/usr/local/lib/android/sdk/platform-tools:${PATH}
         run: |
-          export ANDROID_SDK_ROOT=/usr/local/lib/android/sdk
-          export PATH=$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH
           yes | sdkmanager --licenses
           sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
-          
-      - name: Setup Android NDK (Latest)
+
+      - name: Set Up Android NDK r26d
         uses: nttld/setup-ndk@v1
         id: setup-ndk
         with:
           ndk-version: r26d
           link-to-sdk: true
-          
-      - name: Setup Environment Variables
+
+      - name: Export Env (pin aidl path to 35.0.0)
         run: |
           echo "ANDROID_SDK_ROOT=/usr/local/lib/android/sdk" >> $GITHUB_ENV
           echo "ANDROID_HOME=/usr/local/lib/android/sdk" >> $GITHUB_ENV
           echo "ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> $GITHUB_ENV
           echo "ANDROIDNDK=${{ steps.setup-ndk.outputs.ndk-path }}" >> $GITHUB_ENV
-          echo "PATH=/usr/local/lib/android/sdk/cmdline-tools/latest/bin:$PATH" >> $GITHUB_ENV
-          
+          echo "PATH=/usr/local/lib/android/sdk/build-tools/35.0.0:/usr/local/lib/android/sdk/platform-tools:/usr/local/lib/android/sdk/cmdline-tools/latest/bin:$PATH" >> $GITHUB_ENV
+
+      - name: Patch buildozer.spec (ensure 35.0.0 is pinned; remove unknown key)
+        run: |
+          sed -i 's/^android.build_tools_version *= *.*/android.build_tools_version = 35.0.0/' buildozer.spec
+          sed -i '/^android.gradle_build_tools *= *.*/d' buildozer.spec
+
+      - name: Clean Previous Build (avoids stale state)
+        run: |
+          rm -rf .buildozer bin
+
       - name: Build APK (Debug)
         run: |
           buildozer -v android debug
-          
+
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
