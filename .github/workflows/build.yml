@@ -4,91 +4,100 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
-# Force bash so steps don't try to use /bin/sh
 defaults:
   run:
     shell: bash
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04   # Full VM with sudo/bash/git/tar
 
-    # Plain Ubuntu container (has /bin/bash, apt). Runs as root → no sudo needed.
-    container:
-      image: ubuntu:24.04
-
-    # Android env available to all steps
     env:
-      ANDROID_SDK_ROOT: /opt/android-sdk
-      ANDROID_HOME: /opt/android-sdk
-      # After install, prefer Build-Tools 35 for aidl/aapt2
-      PATH: /opt/android-sdk/build-tools/35.0.0:/opt/android-sdk/platform-tools:/opt/android-sdk/cmdline-tools/latest/bin:$PATH
-      LANG: C.UTF-8
+      ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+      ANDROID_HOME: /usr/local/lib/android/sdk
+      # Prefer Build-Tools 35 once installed so aidl/aapt2 resolve to the pinned version
+      PATH: /usr/local/lib/android/sdk/build-tools/35.0.0:/usr/local/lib/android/sdk/platform-tools:/usr/local/lib/android/sdk/cmdline-tools/latest/bin:$PATH
 
     steps:
-      # A) Bootstrap tools BEFORE checkout so checkout uses git (not tarball)
-      - name: Bootstrap container tools
+      - name: Check Out Repository
+        uses: actions/checkout@v4
+
+      - name: Set Up Java 17 (AGP-compatible)
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set Up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install System Dependencies
         run: |
           set -euxo pipefail
-          apt-get update -y
-          DEBIAN_FRONTEND=noninteractive apt-get install -y \
+          sudo dpkg --add-architecture i386
+          sudo apt-get update -y
+          sudo apt-get install -y \
             git tar wget curl unzip zip ca-certificates \
-            python3 python3-pip \
-            openjdk-17-jdk-headless \
-            build-essential autoconf automake libtool libtool-bin autopoint m4 pkg-config \
-            zlib1g-dev libffi-dev libssl-dev cmake \
+            autoconf automake libtool libtool-bin autopoint m4 pkg-config \
+            build-essential cmake zlib1g-dev libffi-dev libssl-dev \
+            libstdc++6:i386 zlib1g:i386 libncurses6:i386 libtinfo6:i386 \
             patch rsync
-          update-ca-certificates
           git --version
           tar --version
           java -version
           python3 --version
-          pip3 --version
-          echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> $GITHUB_ENV
-          echo "/usr/lib/jvm/java-17-openjdk-amd64/bin" >> $GITHUB_PATH
+          pip --version
 
-      # B) Checkout
-      - name: Check Out Repository
-        uses: actions/checkout@v4
-
-      # C) Python deps for Buildozer/p4a (use container Python to avoid GLIBC mismatch)
       - name: Install Buildozer & Cython
         run: |
           set -euxo pipefail
-          python3 -m pip install --upgrade pip
-          pip3 install buildozer==1.5.0 cython wheel
+          python -m pip install --upgrade pip
+          pip install buildozer==1.5.0 cython wheel
 
-      # D) Android SDK: cmdline-tools, licenses, API 35, Build-Tools 35.0.0, NDK r26d
-      - name: Install Android SDK packages (API 35, Build-Tools 35.0.0, NDK r26d)
+      - name: Install Android cmdline-tools
         run: |
           set -euxo pipefail
-          mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
+          sudo mkdir -p "$ANDROID_SDK_ROOT"
+          sudo chown -R "$USER:$USER" "$ANDROID_SDK_ROOT"
           cd "$ANDROID_SDK_ROOT"
+          wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          unzip -q commandlinetools-linux-11076708_latest.zip
+          mkdir -p cmdline-tools/latest
+          mv cmdline-tools/* cmdline-tools/latest/ || true
 
-          # Install cmdline-tools (provides sdkmanager)
-          if [ ! -d "cmdline-tools/latest" ]; then
-            wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
-            unzip -q commandlinetools-linux-11076708_latest.zip -d cmdline-tools
-            mv cmdline-tools/cmdline-tools cmdline-tools/latest
-          fi
-
-          # Ensure sdkmanager is on PATH for this step
-          export PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH"
-
-          # Accept licenses (portable; no `yes` dependency)
+      - name: Accept Android SDK licenses
+        env:
+          PATH: /usr/local/lib/android/sdk/cmdline-tools/latest/bin:$PATH
+        run: |
+          set -euxo pipefail
+          sdkmanager --version
           printf 'y\n%.0s' {1..60} | sdkmanager --licenses
 
-          # Install required components
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;26.3.11579264"
+      - name: Install Android SDK packages (API 35 + Build-Tools 35.0.0)
+        env:
+          PATH: /usr/local/lib/android/sdk/cmdline-tools/latest/bin:$PATH
+        run: |
+          set -euxo pipefail
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
-          # Persist NDK paths for following steps
-          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.3.11579264" >> $GITHUB_ENV
-          echo "ANDROIDNDK=$ANDROID_SDK_ROOT/ndk/26.3.11579264" >> $GITHUB_ENV
-          echo "$ANDROID_SDK_ROOT/build-tools/35.0.0" >> $GITHUB_PATH
-          echo "$ANDROID_SDK_ROOT/platform-tools" >> $GITHUB_PATH
-          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> $GITHUB_PATH
+      - name: Set Up Android NDK r26d
+        uses: nttld/setup-ndk@v1
+        id: setup-ndk
+        with:
+          ndk-version: r26d
+          link-to-sdk: true
 
-      # E) Spec hygiene & clean state
+      - name: Export Env (pin aidl path to 35.0.0)
+        run: |
+          set -euxo pipefail
+          echo "ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> $GITHUB_ENV
+          echo "ANDROIDNDK=${{ steps.setup-ndk.outputs.ndk-path }}" >> $GITHUB_ENV
+          echo "/usr/local/lib/android/sdk/build-tools/35.0.0" >> $GITHUB_PATH
+          echo "/usr/local/lib/android/sdk/platform-tools" >> $GITHUB_PATH
+          echo "/usr/local/lib/android/sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
+
       - name: Patch buildozer.spec and clean
         run: |
           set -euxo pipefail
@@ -100,17 +109,14 @@ jobs:
           grep -q '^android.api' buildozer.spec || echo 'android.api = 35' >> buildozer.spec
           rm -rf .buildozer bin
 
-      # F) Build (Debug)
       - name: Build APK (Debug)
         run: |
           set -euxo pipefail
           which sdkmanager || true
           which aidl || true
           which aapt2 || true
-          java -version
           buildozer -v android debug
 
-      # G) Upload artifact
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
