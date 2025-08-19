@@ -12,6 +12,7 @@ jobs:
   build:
     runs-on: ubuntu-22.04
 
+    # Do NOT set PATH at the job level (it can hide git/tar for checkout)
     env:
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
       ANDROID_HOME: /usr/local/lib/android/sdk
@@ -29,7 +30,7 @@ jobs:
       - name: Check Out Repository
         uses: actions/checkout@v4
 
-      # 1) Java & Python
+      # 1) Java & Python per Buildozer docs (JDK 17; Python ≥3.8)
       - name: Set Up Java 17
         uses: actions/setup-java@v4
         with:
@@ -41,7 +42,7 @@ jobs:
         with:
           python-version: "3.11"
 
-      # 2) System dependencies (from Buildozer docs + safe extras)
+      # 2) System dependencies (Buildozer-required + safe extras)
       - name: Install System Dependencies
         run: |
           set -euxo pipefail
@@ -54,7 +55,7 @@ jobs:
             automake libtool-bin autopoint m4 build-essential \
             patch rsync
 
-      # 3) Buildozer & Cython (Cython pinned per docs)
+      # 3) Buildozer & Cython (pin Cython==0.29.33 per docs/community)
       - name: Install Buildozer & Cython
         run: |
           set -euxo pipefail
@@ -100,13 +101,42 @@ jobs:
           ndk-version: r26d
           link-to-sdk: true
 
-      - name: Export NDK env
+      # 8) Tell p4a EXACTLY where the SDK/NDK are (prevents fallback to ~/.buildozer internal SDK)
+      - name: Wire SDK/NDK env for p4a
         run: |
           set -euxo pipefail
-          echo "ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> $GITHUB_ENV
+          echo "ANDROIDSDK=${ANDROID_SDK_ROOT}" >> $GITHUB_ENV
           echo "ANDROIDNDK=${{ steps.setup-ndk.outputs.ndk-path }}" >> $GITHUB_ENV
+          echo "ANDROIDAPI=35" >> $GITHUB_ENV
+          echo "NDKAPI=24" >> $GITHUB_ENV
 
-      # 8) Spec hygiene & clean
+      # (Optional but robust) Write SDK/NDK paths into buildozer.spec too
+      - name: Pin SDK/NDK paths in buildozer.spec
+        run: |
+          set -euxo pipefail
+          SDK="/usr/local/lib/android/sdk"
+          NDK="${{ steps.setup-ndk.outputs.ndk-path }}"
+          if grep -q '^android.sdk_path' buildozer.spec; then
+            sed -i "s|^android.sdk_path *= *.*|android.sdk_path = ${SDK}|" buildozer.spec
+          else
+            sed -i "/^\[app\]/a android.sdk_path = ${SDK}" buildozer.spec
+          fi
+          if grep -q '^android.ndk_path' buildozer.spec; then
+            sed -i "s|^android.ndk_path *= *.*|android.ndk_path = ${NDK}|" buildozer.spec
+          else
+            sed -i "/^\[app\]/a android.ndk_path = ${NDK}" buildozer.spec
+          fi
+
+      # Safety net: symlink Buildozer's fallback SDK dir to the real system SDK
+      - name: Fallback symlink to system SDK for p4a
+        run: |
+          set -euxo pipefail
+          mkdir -p "$HOME/.buildozer/android/platform"
+          if [ ! -e "$HOME/.buildozer/android/platform/android-sdk" ]; then
+            ln -s /usr/local/lib/android/sdk "$HOME/.buildozer/android/platform/android-sdk"
+          fi
+
+      # 9) Spec hygiene & clean
       - name: Patch buildozer.spec and clean
         run: |
           set -euxo pipefail
@@ -118,18 +148,25 @@ jobs:
           grep -q '^android.api' buildozer.spec || echo 'android.api = 35' >> buildozer.spec
           rm -rf .buildozer bin
 
-      # 9) Build APK
+      # 10) Verify aidl and toolchain resolution (fast feedback)
+      - name: Verify SDK/NDK and AIDL in PATH
+        run: |
+          set -euxo pipefail
+          echo "ANDROIDSDK=$ANDROIDSDK"
+          echo "ANDROIDNDK=$ANDROIDNDK"
+          ls -1 "$ANDROIDSDK/build-tools" || true
+          which sdkmanager || true
+          which aidl || true
+          aidl --version || true
+          which aapt2 || true
+
+      # 11) Build APK
       - name: Build APK (Debug)
         run: |
           set -euxo pipefail
-          which git
-          which tar
-          which sdkmanager
-          which aidl || true
-          which aapt2 || true
           buildozer -v android debug
 
-      # 10) Upload artifact
+      # 12) Upload artifact
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
