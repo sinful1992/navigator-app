@@ -1,7 +1,7 @@
 [app]
 title = Address Navigator
 package.name = addressnavigator
-package.domain = org.example          # use your real reverse domain if you have one
+package.domain = org.example
 source.dir = .
 version = 1.0.0
 # Optional but recommended for Play Store uploads:
