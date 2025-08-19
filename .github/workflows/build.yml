@@ -10,52 +10,60 @@ defaults:
 
 jobs:
   build:
-    runs-on: ubuntu-22.04   # Full VM with sudo/bash/git/tar
+    runs-on: ubuntu-22.04
 
     env:
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
       ANDROID_HOME: /usr/local/lib/android/sdk
-      # Prefer Build-Tools 35 once installed so aidl/aapt2 resolve to the pinned version
-      PATH: /usr/local/lib/android/sdk/build-tools/35.0.0:/usr/local/lib/android/sdk/platform-tools:/usr/local/lib/android/sdk/cmdline-tools/latest/bin:$PATH
+      JAVA_DISTRIBUTION: temurin
+      JAVA_VERSION: "17"
 
     steps:
+      # 0) Ensure checkout can use git (avoid REST+tar fallback)
+      - name: Ensure git & tar (pre-checkout)
+        run: |
+          set -euxo pipefail
+          sudo apt-get update -y
+          sudo apt-get install -y git tar ca-certificates
+          git --version
+          tar --version
+
       - name: Check Out Repository
         uses: actions/checkout@v4
 
-      - name: Set Up Java 17 (AGP-compatible)
+      # 1) Java & Python (Buildozer tested on Python 3.8+; 3.11 works)
+      - name: Set Up Java 17 (per Buildozer docs)
         uses: actions/setup-java@v4
         with:
-          distribution: temurin
-          java-version: "17"
+          distribution: ${{ env.JAVA_DISTRIBUTION }}
+          java-version: ${{ env.JAVA_VERSION }}
 
       - name: Set Up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
+      # 2) System dependencies (aligned to docs + safe extras)
       - name: Install System Dependencies
         run: |
           set -euxo pipefail
-          sudo dpkg --add-architecture i386
           sudo apt-get update -y
           sudo apt-get install -y \
-            git tar wget curl unzip zip ca-certificates \
-            autoconf automake libtool libtool-bin autopoint m4 pkg-config \
-            build-essential cmake zlib1g-dev libffi-dev libssl-dev \
-            libstdc++6:i386 zlib1g:i386 libncurses6:i386 libtinfo6:i386 \
-            patch rsync
-          git --version
-          tar --version
-          java -version
-          python3 --version
-          pip --version
+            git zip unzip wget curl ca-certificates \
+            autoconf libtool pkg-config zlib1g-dev \
+            libncurses5-dev libncursesw5-dev libtinfo5 \
+            cmake libffi-dev libssl-dev \
+            automake libtool-bin autopoint m4 build-essential patch rsync
+          # (Optional) If you hit missing ncurses libs on 22.04, this satisfies them.
 
+      # 3) Buildozer & Cython (pin per docs)
       - name: Install Buildozer & Cython
         run: |
           set -euxo pipefail
           python -m pip install --upgrade pip
-          pip install buildozer==1.5.0 cython wheel
+          pip install buildozer==1.5.0 "Cython==0.29.33" wheel
 
+      # 4) Android cmdline-tools
       - name: Install Android cmdline-tools
         run: |
           set -euxo pipefail
@@ -67,21 +75,25 @@ jobs:
           mkdir -p cmdline-tools/latest
           mv cmdline-tools/* cmdline-tools/latest/ || true
 
+      # 5) Licenses & SDK components (API 35, Build-Tools 35.0.0)
       - name: Accept Android SDK licenses
-        env:
-          PATH: /usr/local/lib/android/sdk/cmdline-tools/latest/bin:$PATH
         run: |
           set -euxo pipefail
+          export PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH"
           sdkmanager --version
           printf 'y\n%.0s' {1..60} | sdkmanager --licenses
 
-      - name: Install Android SDK packages (API 35 + Build-Tools 35.0.0)
-        env:
-          PATH: /usr/local/lib/android/sdk/cmdline-tools/latest/bin:$PATH
+      - name: Install Android SDK packages
         run: |
           set -euxo pipefail
+          export PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH"
           sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          # Add Android tools to PATH *after* checkout to avoid hiding system tools
+          echo "$ANDROID_SDK_ROOT/build-tools/35.0.0" >> $GITHUB_PATH
+          echo "$ANDROID_SDK_ROOT/platform-tools" >> $GITHUB_PATH
+          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> $GITHUB_PATH
 
+      # 6) NDK r26d
       - name: Set Up Android NDK r26d
         uses: nttld/setup-ndk@v1
         id: setup-ndk
@@ -89,34 +101,33 @@ jobs:
           ndk-version: r26d
           link-to-sdk: true
 
-      - name: Export Env (pin aidl path to 35.0.0)
+      - name: Export NDK env
         run: |
           set -euxo pipefail
           echo "ANDROID_NDK_HOME=${{ steps.setup-ndk.outputs.ndk-path }}" >> $GITHUB_ENV
           echo "ANDROIDNDK=${{ steps.setup-ndk.outputs.ndk-path }}" >> $GITHUB_ENV
-          echo "/usr/local/lib/android/sdk/build-tools/35.0.0" >> $GITHUB_PATH
-          echo "/usr/local/lib/android/sdk/platform-tools" >> $GITHUB_PATH
-          echo "/usr/local/lib/android/sdk/cmdline-tools/latest/bin" >> $GITHUB_PATH
 
+      # 7) Spec hygiene & clean
       - name: Patch buildozer.spec and clean
         run: |
           set -euxo pipefail
-          # Pin Build-Tools (prevents attempts to fetch 36)
           sed -i 's/^android.build_tools_version *= *.*/android.build_tools_version = 35.0.0/' buildozer.spec || true
-          # Remove unknown/ignored key if present
           sed -i '/^android.gradle_build_tools *= *.*/d' buildozer.spec || true
-          # Ensure API is set
           grep -q '^android.api' buildozer.spec || echo 'android.api = 35' >> buildozer.spec
           rm -rf .buildozer bin
 
+      # 8) Build APK
       - name: Build APK (Debug)
         run: |
           set -euxo pipefail
-          which sdkmanager || true
+          which git
+          which tar
+          which sdkmanager
           which aidl || true
           which aapt2 || true
           buildozer -v android debug
 
+      # 9) Upload artifact
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
