@@ -1,34 +1,45 @@
 [app]
 title = Address Navigator
 package.name = addressnavigator
-package.domain = org.example
+package.domain = org.example          # use your real reverse domain if you have one
 source.dir = .
 version = 1.0.0
-requirements = python3,kivy,kivymd,openpyxl
+# Optional but recommended for Play Store uploads:
+# 1.0.0 -> 10000000 (choose any consistent scheme)
+android.numeric_version = 10000000
+
+# Pin libs for reproducible builds (adjust to your tested versions)
+requirements = python3,kivy==2.3.0,kivymd==1.2.0,openpyxl
 entrypoint = main.py
 
-# 2025 REQUIREMENTS - Target Android 15 (API 35) for Galaxy S25 compatibility
+# Android API levels
 android.api = 35
 android.minapi = 24
 android.ndk_api = 24
 
-# Updated permissions for Android 15
-android.permissions = INTERNET,READ_EXTERNAL_STORAGE,WRITE_EXTERNAL_STORAGE,READ_MEDIA_IMAGES,READ_MEDIA_VIDEO,READ_MEDIA_AUDIO
+# Modern permissions (Android 13+). Drop legacy READ/WRITE_EXTERNAL_STORAGE.
+android.permissions = INTERNET,READ_MEDIA_IMAGES,READ_MEDIA_VIDEO,READ_MEDIA_AUDIO
+# If you truly require broad file access on older devices, handle conditionally at runtime.
+# For notifications or foreground services, add as needed:
+# android.permissions = ...,POST_NOTIFICATIONS,FOREGROUND_SERVICE
 
-# Latest build tools
+# Toolchain pinning
 android.build_tools_version = 35.0.0
+android.enable_androidx = True
 
+# Packaging / ABI
 orientation = portrait
 android.archs = arm64-v8a,armeabi-v7a
 
-# Enable modern Android features
+# Backups
 android.allow_backup = True
-android.backup_rules = True
+# Either remove the next line or point it to an actual XML file (e.g., res/xml/backup_rules.xml)
+# android.backup_rules = res/xml/backup_rules.xml
 
 [buildozer]
 log_level = 2
 
 [python-for-android]
+# For day-to-day work, 'develop' is fine. For stable CI, pin a known good tag when ready.
 p4a.branch = develop
-# Use latest NDK recommended for 2025
 ndk_version = 26d
