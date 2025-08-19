@@ -10,30 +10,28 @@ jobs:
     container:
       image: reactnativecommunity/react-native-android:latest
 
+    env:
+      ANDROID_SDK_ROOT: /opt/android-sdk
+      ANDROID_HOME: /opt/android-sdk
+      PATH: /opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/platform-tools:$PATH
+
     steps:
       - name: Check Out Repository
         uses: actions/checkout@v4
 
-      - name: Set Up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
       - name: Install Buildozer & Cython
         run: |
-          python -m pip install --upgrade pip
-          pip install buildozer==1.5.0 cython
+          python3 -m pip install --upgrade pip
+          pip3 install buildozer==1.5.0 cython
 
       - name: Install Android SDK packages
-        env:
-          ANDROID_SDK_ROOT: /opt/android-sdk
-          ANDROID_HOME: /opt/android-sdk
-          PATH: /opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/platform-tools:$PATH
         run: |
+          mkdir -p /opt/android-sdk/cmdline-tools
+          cd /opt/android-sdk
           wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
-          unzip -q commandlinetools-linux-11076708_latest.zip -d /opt/android-sdk/cmdline-tools
-          mv /opt/android-sdk/cmdline-tools/cmdline-tools /opt/android-sdk/cmdline-tools/latest
-          yes | sdkmanager --licenses
+          unzip -q commandlinetools-linux-11076708_latest.zip -d cmdline-tools
+          mv cmdline-tools/cmdline-tools cmdline-tools/latest
+          printf 'y\n%.0s' {1..30} | sdkmanager --licenses
           sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
       - name: Patch buildozer.spec (ensure 35.0.0 is pinned)
