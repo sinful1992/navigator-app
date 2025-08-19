@@ -4,80 +4,113 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+# Force bash so steps don't try to use /bin/sh
+defaults:
+  run:
+    shell: bash
+
 jobs:
   build:
     runs-on: ubuntu-latest
-    container:
-      image: reactnativecommunity/react-native-android:latest
 
+    # Plain Ubuntu container (has /bin/bash, apt). Runs as root → no sudo needed.
+    container:
+      image: ubuntu:24.04
+
+    # Android env available to all steps
     env:
       ANDROID_SDK_ROOT: /opt/android-sdk
       ANDROID_HOME: /opt/android-sdk
+      # After install, prefer Build-Tools 35 for aidl/aapt2
       PATH: /opt/android-sdk/build-tools/35.0.0:/opt/android-sdk/platform-tools:/opt/android-sdk/cmdline-tools/latest/bin:$PATH
+      LANG: C.UTF-8
 
     steps:
-      # 1) Ensure tools required by checkout exist inside the container
+      # A) Bootstrap tools BEFORE checkout so checkout uses git (not tarball)
       - name: Bootstrap container tools
         run: |
+          set -euxo pipefail
           apt-get update -y
-          apt-get install -y git tar wget unzip python3 python3-pip ca-certificates
+          DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            git tar wget curl unzip zip ca-certificates \
+            python3 python3-pip \
+            openjdk-17-jdk-headless \
+            build-essential autoconf automake libtool libtool-bin autopoint m4 pkg-config \
+            zlib1g-dev libffi-dev libssl-dev cmake \
+            patch rsync
+          update-ca-certificates
           git --version
           tar --version
+          java -version
           python3 --version
           pip3 --version
+          echo "JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64" >> $GITHUB_ENV
+          echo "/usr/lib/jvm/java-17-openjdk-amd64/bin" >> $GITHUB_PATH
 
-      # 2) Check out your repo (will use git now, not REST tarball)
+      # B) Checkout
       - name: Check Out Repository
         uses: actions/checkout@v4
 
-      # 3) Buildozer & Python deps (use container's Python to avoid GLIBC mismatch)
+      # C) Python deps for Buildozer/p4a (use container Python to avoid GLIBC mismatch)
       - name: Install Buildozer & Cython
         run: |
+          set -euxo pipefail
           python3 -m pip install --upgrade pip
           pip3 install buildozer==1.5.0 cython wheel
 
-      # 4) Android cmdline-tools + accept licenses + install SDK/Build-Tools/NDK
+      # D) Android SDK: cmdline-tools, licenses, API 35, Build-Tools 35.0.0, NDK r26d
       - name: Install Android SDK packages (API 35, Build-Tools 35.0.0, NDK r26d)
         run: |
+          set -euxo pipefail
           mkdir -p "$ANDROID_SDK_ROOT/cmdline-tools"
           cd "$ANDROID_SDK_ROOT"
-          # Install cmdline-tools if not present
+
+          # Install cmdline-tools (provides sdkmanager)
           if [ ! -d "cmdline-tools/latest" ]; then
             wget -q https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
             unzip -q commandlinetools-linux-11076708_latest.zip -d cmdline-tools
             mv cmdline-tools/cmdline-tools cmdline-tools/latest
           fi
 
-          # License acceptance (portable; avoids `yes`)
-          printf 'y\n%.0s' {1..40} | sdkmanager --licenses
+          # Ensure sdkmanager is on PATH for this step
+          export PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH"
 
-          # Required packages
-          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;26.1.10909125"
+          # Accept licenses (portable; no `yes` dependency)
+          printf 'y\n%.0s' {1..60} | sdkmanager --licenses
 
-          # Export NDK paths for later steps
-          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.1.10909125" >> $GITHUB_ENV
-          echo "ANDROIDNDK=$ANDROID_SDK_ROOT/ndk/26.1.10909125" >> $GITHUB_ENV
+          # Install required components
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;26.3.11579264"
 
-      # 5) Pin Build-Tools version & clean stale state
+          # Persist NDK paths for following steps
+          echo "ANDROID_NDK_HOME=$ANDROID_SDK_ROOT/ndk/26.3.11579264" >> $GITHUB_ENV
+          echo "ANDROIDNDK=$ANDROID_SDK_ROOT/ndk/26.3.11579264" >> $GITHUB_ENV
+          echo "$ANDROID_SDK_ROOT/build-tools/35.0.0" >> $GITHUB_PATH
+          echo "$ANDROID_SDK_ROOT/platform-tools" >> $GITHUB_PATH
+          echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> $GITHUB_PATH
+
+      # E) Spec hygiene & clean state
       - name: Patch buildozer.spec and clean
         run: |
-          # Ensure build-tools pin (prevents Build-Tools 36 request)
-          sed -i 's/^android.build_tools_version *= *.*/android.build_tools_version = 35.0.0/' buildozer.spec
-          sed -i '/^android.gradle_build_tools *= *.*/d' buildozer.spec
-
-          # (Optional) Ensure api is 35 if missing
+          set -euxo pipefail
+          # Pin Build-Tools (prevents attempts to fetch 36)
+          sed -i 's/^android.build_tools_version *= *.*/android.build_tools_version = 35.0.0/' buildozer.spec || true
+          # Remove unknown/ignored key if present
+          sed -i '/^android.gradle_build_tools *= *.*/d' buildozer.spec || true
+          # Ensure API is set
           grep -q '^android.api' buildozer.spec || echo 'android.api = 35' >> buildozer.spec
-
           rm -rf .buildozer bin
 
-      # 6) Build APK
+      # F) Build (Debug)
       - name: Build APK (Debug)
         run: |
-          # Ensure the PATH prioritizes AIDL from 35.0.0
-          export PATH="$ANDROID_SDK_ROOT/build-tools/35.0.0:$ANDROID_SDK_ROOT/platform-tools:$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH"
+          set -euxo pipefail
+          which sdkmanager || true
+          which aidl || true
+          which aapt2 || true
+          java -version
           buildozer -v android debug
 
-      # 7) Upload artifact
+      # G) Upload artifact
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
