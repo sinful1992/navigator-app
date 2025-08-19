@@ -15,8 +15,6 @@ jobs:
     env:
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
       ANDROID_HOME: /usr/local/lib/android/sdk
-      JAVA_DISTRIBUTION: temurin
-      JAVA_VERSION: "17"
 
     steps:
       # 0) Ensure checkout can use git (avoid REST+tar fallback)
@@ -31,32 +29,33 @@ jobs:
       - name: Check Out Repository
         uses: actions/checkout@v4
 
-      # 1) Java & Python (Buildozer tested on Python 3.8+; 3.11 works)
-      - name: Set Up Java 17 (per Buildozer docs)
+      # 1) Java & Python (Buildozer tests on >=3.8; JDK 17 per docs)
+      - name: Set Up Java 17
         uses: actions/setup-java@v4
         with:
-          distribution: ${{ env.JAVA_DISTRIBUTION }}
-          java-version: ${{ env.JAVA_VERSION }}
+          distribution: temurin
+          java-version: "17"
 
       - name: Set Up Python 3.11
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      # 2) System dependencies (aligned to docs + safe extras)
+      # 2) System deps (from Buildozer docs + safe extras)
       - name: Install System Dependencies
         run: |
           set -euxo pipefail
           sudo apt-get update -y
           sudo apt-get install -y \
             git zip unzip wget curl ca-certificates \
+            openjdk-17-jdk \
             autoconf libtool pkg-config zlib1g-dev \
             libncurses5-dev libncursesw5-dev libtinfo5 \
             cmake libffi-dev libssl-dev \
-            automake libtool-bin autopoint m4 build-essential patch rsync
-          # (Optional) If you hit missing ncurses libs on 22.04, this satisfies them.
+            automake libtool-bin autopoint m4 build-essential \
+            patch rsync
 
-      # 3) Buildozer & Cython (pin per docs)
+      # 3) Buildozer & Cython (pin Cython==0.29.33 per docs)
       - name: Install Buildozer & Cython
         run: |
           set -euxo pipefail
@@ -75,7 +74,7 @@ jobs:
           mkdir -p cmdline-tools/latest
           mv cmdline-tools/* cmdline-tools/latest/ || true
 
-      # 5) Licenses & SDK components (API 35, Build-Tools 35.0.0)
+      # 5) Licenses & SDK components (API 35 + Build-Tools 35.0.0)
       - name: Accept Android SDK licenses
         run: |
           set -euxo pipefail
@@ -88,12 +87,12 @@ jobs:
           set -euxo pipefail
           export PATH="$ANDROID_SDK_ROOT/cmdline-tools/latest/bin:$PATH"
           sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
-          # Add Android tools to PATH *after* checkout to avoid hiding system tools
+          # Add Android tools to PATH *after* install so checkout wasn't affected
           echo "$ANDROID_SDK_ROOT/build-tools/35.0.0" >> $GITHUB_PATH
           echo "$ANDROID_SDK_ROOT/platform-tools" >> $GITHUB_PATH
           echo "$ANDROID_SDK_ROOT/cmdline-tools/latest/bin" >> $GITHUB_PATH
 
-      # 6) NDK r26d
+      # 6) NDK r26d (p4a-compatible)
       - name: Set Up Android NDK r26d
         uses: nttld/setup-ndk@v1
         id: setup-ndk
@@ -111,8 +110,11 @@ jobs:
       - name: Patch buildozer.spec and clean
         run: |
           set -euxo pipefail
+          # Pin Build-Tools (prevents attempts to fetch 36)
           sed -i 's/^android.build_tools_version *= *.*/android.build_tools_version = 35.0.0/' buildozer.spec || true
+          # Remove non-standard key if present
           sed -i '/^android.gradle_build_tools *= *.*/d' buildozer.spec || true
+          # Ensure API is set
           grep -q '^android.api' buildozer.spec || echo 'android.api = 35' >> buildozer.spec
           rm -rf .buildozer bin
 
