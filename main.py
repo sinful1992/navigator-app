@@ -176,8 +176,9 @@ class CompletedAddressesScreen(MDScreen):
             theme_text_color="Primary",
             font_style="Body1",
             size_hint_x=0.6,
-            text_size=(None, None),
-            halign="left"
+            halign="left",
+            shorten=True,
+            shorten_from='right'
         )
         outcome_color = {
             "PIF": [0, 0.7, 0, 1],
@@ -297,7 +298,6 @@ class CompletedAddressesScreen(MDScreen):
             filename = f"completed_addresses_{timestamp}.csv"
 
             if platform == 'android' and ANDROID_AVAILABLE:
-                # Best-effort: write to public Downloads if accessible; else app dir
                 try:
                     downloads_path = "/storage/emulated/0/Download"
                     if not os.path.exists(downloads_path):
@@ -441,7 +441,6 @@ class AddressScreen(MDScreen):
             self.create_address_buttons()
 
     def request_android_permissions(self, dt):
-        # Not required for SAF, but harmless if present
         if platform == 'android' and ANDROID_AVAILABLE:
             try:
                 request_permissions([Permission.READ_EXTERNAL_STORAGE, Permission.WRITE_EXTERNAL_STORAGE])
@@ -456,16 +455,13 @@ class AddressScreen(MDScreen):
             self.file_manager = None
 
     def open_file_manager(self):
-        # Preferred path on Android: use SAF
         if platform == 'android' and ANDROID_AVAILABLE and ASK_AVAILABLE and self.chooser:
             try:
-                # Allow all; we validate extension after copy
                 self.chooser.choose_content('*/*')
                 return
             except Exception as e:
                 print(f"Chooser failed, falling back to MDFileManager: {e}")
 
-        # Fallback: desktop / legacy Android paths
         if self.file_manager is None:
             toast("File manager not available")
             return
@@ -548,14 +544,46 @@ class AddressScreen(MDScreen):
             toast("Excel support not available")
             return
         try:
-            workbook = load_workbook(file_path, read_only=True)
+            # FIX: Use data_only=True to avoid style-related errors
+            workbook = load_workbook(
+                file_path, 
+                read_only=True,
+                data_only=True  # This prevents style loading issues
+            )
             worksheet = workbook.active
-            rows = list(worksheet.rows)
+            
+            # Convert to list immediately to avoid generator issues
+            try:
+                rows = list(worksheet.rows)
+            except Exception as e:
+                print(f"Error reading rows: {e}")
+                # Fallback: read manually row by row
+                rows = []
+                for row in worksheet.iter_rows():
+                    try:
+                        rows.append(row)
+                    except:
+                        continue
+            
             if not rows:
                 toast("No data found in the file")
                 return
 
-            headers = [cell.value for cell in rows[0]]
+            # Get headers safely
+            try:
+                headers = []
+                for cell in rows[0]:
+                    try:
+                        value = cell.value
+                        headers.append(str(value) if value is not None else "")
+                    except:
+                        headers.append("")
+            except Exception as e:
+                print(f"Error reading headers: {e}")
+                toast("Error reading file headers")
+                return
+            
+            # Find address column
             address_column_idx = None
             possible_names = ['address', 'Address', 'ADDRESS', 'street', 'Street', 'location', 'Location']
             for i, header in enumerate(headers):
@@ -564,17 +592,28 @@ class AddressScreen(MDScreen):
                     break
             if address_column_idx is None:
                 address_column_idx = 0
-                if headers[0]:
+                if headers and headers[0]:
                     toast(f"Using column '{headers[0]}' as addresses")
 
+            # Extract addresses safely
             self.addresses = []
-            for row in rows[1:]:
-                if len(row) > address_column_idx and row[address_column_idx].value:
-                    address = str(row[address_column_idx].value).strip()
-                    if address and address.lower() != 'none':
-                        self.addresses.append(address)
+            for row_idx, row in enumerate(rows[1:], 1):  # Skip header
+                try:
+                    if len(row) > address_column_idx:
+                        cell = row[address_column_idx]
+                        if cell and cell.value:
+                            address = str(cell.value).strip()
+                            if address and address.lower() != 'none':
+                                self.addresses.append(address)
+                except Exception as e:
+                    print(f"Error reading row {row_idx}: {e}")
+                    continue
 
-            workbook.close()
+            # Close workbook properly
+            try:
+                workbook.close()
+            except:
+                pass
 
             if self.addresses:
                 self.completed_addresses.clear()
@@ -588,8 +627,18 @@ class AddressScreen(MDScreen):
                 toast("No addresses found in the file")
 
         except Exception as e:
-            toast(f"Error loading Excel file: {str(e)}")
-            print(f"Excel loading error: {e}")
+            error_msg = str(e)
+            print(f"Excel loading error: {error_msg}")
+            
+            # Provide specific error messages
+            if "CellStyle" in error_msg or "styles" in error_msg:
+                toast("Excel file formatting issue. Try saving as CSV instead.")
+            elif "BadZipFile" in error_msg:
+                toast("Invalid Excel file format")
+            elif "PermissionError" in error_msg:
+                toast("Cannot access file - check permissions")
+            else:
+                toast(f"Error loading Excel file: {error_msg[:50]}")
 
     def load_csv_file(self, file_path):
         try:
@@ -653,15 +702,18 @@ class AddressScreen(MDScreen):
                 size_hint_y=None,
                 height=dp(56)
             )
+            
+            # FIX: Simplified label without Clock.schedule_once
             address_label = MDLabel(
                 text=str(address),
                 theme_text_color="Primary",
                 size_hint_x=0.6,
-                text_size=(None, None),
                 halign="left",
-                valign="center"
+                valign="center",
+                markup=False,
+                shorten=True,
+                shorten_from='right'
             )
-            Clock.schedule_once(lambda dt, label=address_label: setattr(label, 'text_size', (label.width, None)), 0.1)
 
             button_layout = MDBoxLayout(orientation='horizontal', size_hint_x=0.4, spacing=dp(8), adaptive_width=False)
             nav_button = MDRaisedButton(
@@ -865,7 +917,7 @@ class AddressScreen(MDScreen):
             message_content = MDBoxLayout(orientation='vertical', adaptive_height=True, spacing=dp(16), size_hint_y=None, height=dp(152))
             title_label = MDLabel(text="Welcome to Address Navigator!", theme_text_color="Primary", font_style="H6", halign="center", size_hint_y=None, height=dp(32))
             instruction_text = "Load an Excel (.xlsx) or CSV file with addresses to get started." if OPENPYXL_AVAILABLE else "Load a CSV file with addresses to get started."
-            instruction_label = MDLabel(text=instruction_text, theme_text_color="Secondary", halign="center", text_size=(None, None), size_hint_y=None, height=dp(48))
+            instruction_label = MDLabel(text=instruction_text, theme_text_color="Secondary", halign="center", size_hint_y=None, height=dp(48))
             load_button = MDRaisedButton(text="Load File", size_hint=(None, None), size=(dp(140), dp(40)), pos_hint={"center_x": 0.5}, on_release=lambda x: self.open_file_manager())
             message_content.add_widget(title_label)
             message_content.add_widget(instruction_label)
