@@ -370,6 +370,8 @@ class AddressScreen(MDScreen):
         self.completed_timestamps = {}
         self.completed_outcomes = {}
         self.completed_amounts = {}
+        self.address_order = []  # Track custom ordering
+        self.active_address_index = None  # Track currently active/navigated address
         self.completion_file = "completed_addresses.json"
         self.file_manager = None
         self.dialog = None
@@ -760,6 +762,8 @@ class AddressScreen(MDScreen):
         """Update addresses on main thread"""
         if addresses:
             self.addresses = addresses
+            self.address_order = list(range(len(addresses)))  # Initialize order
+            self.active_address_index = None
             self.completed_addresses.clear()
             self.completed_timestamps.clear()
             self.completed_outcomes.clear()
@@ -770,10 +774,37 @@ class AddressScreen(MDScreen):
         else:
             toast("No addresses found in the file")
 
+    def get_ordered_addresses(self):
+        """Get addresses in custom order: active first, then pending, then completed"""
+        if not self.addresses or not self.address_order:
+            return [(i, addr) for i, addr in enumerate(self.addresses)]
+        
+        active_items = []
+        pending_items = []
+        completed_items = []
+        
+        for display_pos, original_index in enumerate(self.address_order):
+            if original_index < len(self.addresses):
+                address = self.addresses[original_index]
+                item = (original_index, address)
+                
+                if original_index == self.active_address_index:
+                    active_items.append(item)
+                elif original_index in self.completed_addresses:
+                    completed_items.append(item)
+                else:
+                    pending_items.append(item)
+        
+        # Return in order: active, pending, completed
+        return active_items + pending_items + completed_items
     @mainthread
     def create_address_buttons(self):
         self.address_layout.clear_widgets()
-        for i, address in enumerate(self.addresses):
+        
+        # Get addresses in custom order
+        ordered_addresses = self.get_ordered_addresses()
+        
+        for original_index, address in ordered_addresses:
             card = MDCard(
                 size_hint_y=None,
                 height=dp(80),
@@ -782,6 +813,19 @@ class AddressScreen(MDScreen):
                 spacing=dp(8),
                 radius=[8]
             )
+            
+            # Add visual indicator for active/completed status
+            is_active = original_index == self.active_address_index
+            is_completed = original_index in self.completed_addresses
+            
+            # Change card color based on status
+            if is_active and not is_completed:
+                card.md_bg_color = (0.8, 0.9, 1.0, 1.0)  # Light blue for active
+                card.elevation = 4
+            elif is_completed:
+                card.md_bg_color = (0.9, 0.9, 0.9, 1.0)  # Light gray for completed
+                card.elevation = 1
+            
             card_layout = MDBoxLayout(
                 orientation='horizontal',
                 spacing=dp(12),
@@ -790,14 +834,18 @@ class AddressScreen(MDScreen):
                 height=dp(56)
             )
 
-            # Fixed label with proper text_size for alignment
+            # Create address label with status indicator
+            address_text = str(address)
+            if is_active and not is_completed:
+                address_text = f"🎯 {address_text}"  # Target emoji for active
+            
             address_label = MDLabel(
-                text=str(address),
+                text=address_text,
                 theme_text_color="Primary",
                 size_hint_x=0.6,
                 halign="left",
                 valign="center",
-                text_size=(None, None),  # This fixes text alignment issues
+                text_size=(None, None),
                 markup=False,
                 shorten=True,
                 shorten_from='right'
@@ -808,16 +856,16 @@ class AddressScreen(MDScreen):
                 text="Navigate",
                 size_hint=(None, None),
                 size=(dp(100), dp(36)),
-                on_release=lambda x, addr=address, idx=i: self.navigate_to_address(addr, idx)
+                on_release=lambda x, addr=address, idx=original_index: self.navigate_to_address(addr, idx)
             )
-            is_completed = i in self.completed_addresses
+            
             complete_button = MDIconButton(
                 icon="check-circle" if is_completed else "circle-outline",
                 theme_icon_color="Custom",
                 icon_color=[0, 0.7, 0, 1] if is_completed else [0.5, 0.5, 0.5, 1],
                 size_hint=(None, None),
                 size=(dp(40), dp(40)),
-                on_release=lambda x, idx=i: self.show_completion_dialog(idx)
+                on_release=lambda x, idx=original_index: self.show_completion_dialog(idx)
             )
             button_layout.add_widget(nav_button)
             button_layout.add_widget(complete_button)
