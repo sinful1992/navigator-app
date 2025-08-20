@@ -7,7 +7,7 @@ version = 1.0.0
 entrypoint = main.py
 
 # Pin libs for reproducible builds (optional but recommended)
-requirements = python3,kivy==2.3.0,kivymd==1.2.0,openpyxl,androidstorage4kivy
+requirements = python3,kivy==2.3.0,kivymd==1.2.0,androidstorage4kivy,openpyxl==3.1.2,et_xmlfile==1.1.0
 
 # Android API levels
 android.api = 35
