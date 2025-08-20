@@ -107,6 +107,7 @@ jobs:
         id: setup-ndk
         with:
           ndk-version: r25b
+        # link-to-sdk not required when p4a gets ANDROIDNDK env, but harmless if true
           link-to-sdk: true
 
       # 8) Tell p4a EXACTLY where the SDK/NDK are
@@ -118,23 +119,6 @@ jobs:
           echo "ANDROIDAPI=35" >> $GITHUB_ENV
           echo "NDKAPI=24" >> $GITHUB_ENV
 
-      # (Optional but robust) Write SDK/NDK paths into buildozer.spec too
-      - name: Pin SDK/NDK paths in buildozer.spec
-        run: |
-          set -euxo pipefail
-          SDK="/usr/local/lib/android/sdk"
-          NDK="${{ steps.setup-ndk.outputs.ndk-path }}"
-          if grep -q '^android.sdk_path' buildozer.spec; then
-            sed -i "s|^android.sdk_path *= *.*|android.sdk_path = ${SDK}|" buildozer.spec
-          else
-            sed -i "/^\[app\]/a android.sdk_path = ${SDK}" buildozer.spec
-          fi
-          if grep -q '^android.ndk_path' buildozer.spec; then
-            sed -i "s|^android.ndk_path *= *.*|android.ndk_path = ${NDK}|" buildozer.spec
-          else
-            sed -i "/^\[app\]/a android.ndk_path = ${NDK}" buildozer.spec
-          fi
-
       # Safety net: symlink Buildozer's fallback SDK dir to the real system SDK
       - name: Fallback symlink to system SDK for p4a
         run: |
@@ -144,16 +128,29 @@ jobs:
             ln -s /usr/local/lib/android/sdk "$HOME/.buildozer/android/platform/android-sdk"
           fi
 
-      # 9) Spec hygiene & clean
-      - name: Patch buildozer.spec and clean
+      # 9) Update buildozer.spec (requirements incl. XLSX support, toolchain pins) & clean
+      - name: Update buildozer.spec and clean
         run: |
           set -euxo pipefail
+          # Ensure XLSX + SAF support in requirements (pin for reproducibility)
+          if grep -q '^requirements *= *' buildozer.spec; then
+            sed -i 's/^requirements *= *.*/requirements = python3,kivy==2.3.0,kivymd==1.2.0,androidstorage4kivy,openpyxl==3.1.2,et_xmlfile==1.1.0/' buildozer.spec
+          else
+            sed -i '/^\[app\]/a requirements = python3,kivy==2.3.0,kivymd==1.2.0,androidstorage4kivy,openpyxl==3.1.2,et_xmlfile==1.1.0' buildozer.spec
+          fi
           # Pin Build-Tools (prevents attempts to fetch 36)
           sed -i 's/^android.build_tools_version *= *.*/android.build_tools_version = 35.0.0/' buildozer.spec || true
+          # Enable AndroidX explicitly
+          if grep -q '^android.enable_androidx' buildozer.spec; then
+            sed -i 's/^android.enable_androidx *= *.*/android.enable_androidx = True/' buildozer.spec
+          else
+            sed -i '/^\[app\]/a android.enable_androidx = True' buildozer.spec
+          fi
           # Remove non-standard key if present
           sed -i '/^android.gradle_build_tools *= *.*/d' buildozer.spec || true
           # Ensure API is set
           grep -q '^android.api' buildozer.spec || echo 'android.api = 35' >> buildozer.spec
+          # Start from a clean state
           rm -rf .buildozer bin
 
       # 10) Verify aidl and toolchain resolution (fast feedback)
