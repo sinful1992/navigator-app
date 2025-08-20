@@ -17,7 +17,7 @@ jobs:
   build-and-release:
     runs-on: ubuntu-latest
     env:
-      DOCKER_BUILDKIT: "0"        # Defensive: avoid BuildKit quirks during docker pull
+      DOCKER_BUILDKIT: "0"        # Defensive against BuildKit quirks
 
     steps:
       - name: Checkout
@@ -25,7 +25,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Speeds up repeat builds (Android SDK/NDK/Gradle & .buildozer cache)
+      # Caches to speed up builds across runs
       - name: Cache Buildozer & Gradle
         uses: actions/cache@v4
         with:
@@ -37,7 +37,7 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-buildozer-
 
-      # ✅ Use GHCR mirror instead of Docker Hub to avoid "unsupported media type" pull error
+      # ✅ Use GHCR mirror; and pass ONLY 'android debug' (entrypoint is 'buildozer')
       - name: Build APK (debug) with Buildozer in Docker (via GHCR)
         run: |
           sudo docker pull ghcr.io/kivy/buildozer:latest
@@ -47,7 +47,7 @@ jobs:
             -v "$HOME/.buildozer":/home/user/.buildozer \
             -v "$HOME/.gradle":/home/user/.gradle \
             ghcr.io/kivy/buildozer:latest \
-            buildozer android debug
+            android debug
 
       - name: Locate APK
         id: apk
