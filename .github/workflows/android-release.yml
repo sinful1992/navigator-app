@@ -2,12 +2,12 @@ name: Android (Buildozer) → GitHub Release
 
 on:
   push:
-    branches: [ "main" ]        # Nightly builds from main
-    tags:     [ "v*" ]          # Versioned releases when you push a tag like v1.2.3
-  workflow_dispatch:             # Manual run
+    branches: [ "main" ]         # Nightly builds from main
+    tags:     [ "v*" ]           # Versioned releases when you push a tag like v1.2.3
+  workflow_dispatch:              # Manual run
 
 permissions:
-  contents: write                # Needed to create/update releases
+  contents: write                 # Needed to create/update releases
 
 concurrency:
   group: release-${{ github.ref }}
@@ -16,6 +16,8 @@ concurrency:
 jobs:
   build-and-release:
     runs-on: ubuntu-latest
+    env:
+      DOCKER_BUILDKIT: "0"        # Defensive: avoid BuildKit quirks during docker pull
 
     steps:
       - name: Checkout
@@ -23,7 +25,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Optional: cache Buildozer & Gradle to speed up repeated builds
+      # Speeds up repeat builds (Android SDK/NDK/Gradle & .buildozer cache)
       - name: Cache Buildozer & Gradle
         uses: actions/cache@v4
         with:
@@ -35,25 +37,21 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-buildozer-
 
-      # Build inside the official Buildozer Docker image (isolated, predictable)
-      - name: Build APK (debug) with Buildozer in Docker
-        # For a signed Play-ready build, switch `debug` → `release`
-        # and ensure keystore settings are configured in buildozer.spec
+      # ✅ Use GHCR mirror instead of Docker Hub to avoid "unsupported media type" pull error
+      - name: Build APK (debug) with Buildozer in Docker (via GHCR)
         run: |
-          sudo docker pull kivy/buildozer:latest
-          # Mount the repo and the build cache for persistence across runs
+          sudo docker pull ghcr.io/kivy/buildozer:latest
           sudo docker run --rm \
             -e BUILDOZER_WARN_ON_ROOT=0 \
             -v "$PWD":/home/user/app \
             -v "$HOME/.buildozer":/home/user/.buildozer \
             -v "$HOME/.gradle":/home/user/.gradle \
-            kivy/buildozer:latest \
+            ghcr.io/kivy/buildozer:latest \
             buildozer android debug
 
       - name: Locate APK
         id: apk
         run: |
-          # Pick the newest APK from bin/
           APK="$(ls -1t bin/*.apk | head -n1)"
           if [ -z "$APK" ]; then
             echo "No APK found in bin/. Build likely failed."
@@ -62,7 +60,7 @@ jobs:
           echo "apk_path=$APK" >> "$GITHUB_OUTPUT"
           echo "Found: $APK"
 
-      # If this is a tag push (e.g., v1.2.3), create a normal release with that tag
+      # If this is a tag push (e.g., v1.2.3), create/update a normal release with that tag
       - name: Create/Upload versioned release (on tag)
         if: startsWith(github.ref, 'refs/tags/')
         env:
@@ -71,12 +69,10 @@ jobs:
           TAG="${GITHUB_REF##*/}"
           NAME="$TAG"
           NOTES="Automated release for $TAG"
-          # Create the release if it doesn't exist
           gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" -t "$NAME" -n "$NOTES"
-          # Upload (overwrite if exists)
           gh release upload "$TAG" "${{ steps.apk.outputs.apk_path }}" --clobber
 
-      # Otherwise (push to main / manual run), publish/update a "nightly" pre-release
+      # Otherwise (push to main / manual run), publish/update a rolling "nightly" pre-release
       - name: Create/Upload nightly pre-release (on main)
         if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
         env:
@@ -85,9 +81,7 @@ jobs:
           TAG="nightly"
           TITLE="nightly"
           NOTES="Nightly build: $(date -u +'%Y-%m-%d %H:%M:%SZ')"
-          # Create the nightly pre-release if not present
           gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" -p -t "$TITLE" -n "$NOTES"
-          # Upload (overwrite same asset on each run)
           gh release upload "$TAG" "${{ steps.apk.outputs.apk_path }}" --clobber
 
       - name: Summary
