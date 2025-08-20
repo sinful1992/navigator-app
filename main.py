@@ -20,6 +20,7 @@ import os
 import json
 from urllib.parse import quote_plus
 from datetime import datetime
+import threading
 
 # Try to import openpyxl, fallback if not available
 try:
@@ -118,6 +119,7 @@ class CompletedAddressesScreen(MDScreen):
                 theme_text_color="Primary",
                 font_style="H6",
                 halign="center",
+                text_size=(None, None),  # Fixed text alignment
                 size_hint_y=None,
                 height=dp(32)
             )
@@ -125,6 +127,7 @@ class CompletedAddressesScreen(MDScreen):
                 text="Complete some addresses from the main screen to see them here.",
                 theme_text_color="Secondary",
                 halign="center",
+                text_size=(None, None),  # Fixed text alignment
                 size_hint_y=None,
                 height=dp(48)
             )
@@ -148,7 +151,8 @@ class CompletedAddressesScreen(MDScreen):
             text=f"Total Completed: {len(sorted_completed)}",
             theme_text_color="Primary",
             font_style="H6",
-            size_hint_x=0.7
+            size_hint_x=0.7,
+            text_size=(None, None)  # Fixed text alignment
         )
         export_button = MDRaisedButton(text="Export", size_hint_x=0.3, on_release=lambda x: self.export_completed())
         summary_layout.add_widget(total_label)
@@ -177,6 +181,7 @@ class CompletedAddressesScreen(MDScreen):
             font_style="Body1",
             size_hint_x=0.6,
             halign="left",
+            text_size=(None, None),  # Fixed text alignment
             shorten=True,
             shorten_from='right'
         )
@@ -193,6 +198,7 @@ class CompletedAddressesScreen(MDScreen):
             font_style="Subtitle2",
             size_hint_x=0.4,
             halign="right",
+            text_size=(None, None),  # Fixed text alignment
             bold=True
         )
         top_row.add_widget(address_label)
@@ -201,11 +207,12 @@ class CompletedAddressesScreen(MDScreen):
         if item['amount']:
             amount_row = MDBoxLayout(orientation='horizontal', size_hint_y=None, height=dp(24), spacing=dp(8))
             amount_label = MDLabel(
-                text=f"Amount: Â£{item['amount']}",
+                text=f"Amount: £{item['amount']}",
                 theme_text_color="Primary",
                 font_style="Caption",
                 size_hint_x=0.7,
-                halign="left"
+                halign="left",
+                text_size=(None, None)  # Fixed text alignment
             )
             amount_row.add_widget(amount_label)
             amount_row.add_widget(MDLabel(size_hint_x=0.3))
@@ -221,7 +228,8 @@ class CompletedAddressesScreen(MDScreen):
             theme_text_color="Secondary",
             font_style="Caption",
             size_hint_x=0.7,
-            halign="left"
+            halign="left",
+            text_size=(None, None)  # Fixed text alignment
         )
         bottom_row.add_widget(time_label)
 
@@ -283,30 +291,26 @@ class CompletedAddressesScreen(MDScreen):
         self.clear_dialog.dismiss()
 
     def export_completed(self):
+        # Run export in background thread to avoid UI blocking
+        threading.Thread(target=self._export_completed_background, daemon=True).start()
+
+    def _export_completed_background(self):
         try:
             address_screen = self.app_instance.get_address_screen()
             if not address_screen:
-                toast("Unable to access address data")
+                Clock.schedule_once(lambda dt: toast("Unable to access address data"), 0)
                 return
 
             completed_data = address_screen.get_completed_addresses_with_timestamps()
             if not completed_data:
-                toast("No completed addresses to export")
+                Clock.schedule_once(lambda dt: toast("No completed addresses to export"), 0)
                 return
 
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = f"completed_addresses_{timestamp}.csv"
 
-            if platform == 'android' and ANDROID_AVAILABLE:
-                try:
-                    downloads_path = "/storage/emulated/0/Download"
-                    if not os.path.exists(downloads_path):
-                        downloads_path = "/sdcard/Download"
-                    filepath = os.path.join(downloads_path, filename)
-                except Exception:
-                    filepath = filename
-            else:
-                filepath = os.path.join(os.path.expanduser("~"), filename)
+            # Get proper storage path for Android
+            filepath = self._get_export_path(filename)
 
             with open(filepath, 'w', newline='', encoding='utf-8') as csvfile:
                 fieldnames = ['address', 'outcome', 'amount', 'completed_date', 'completed_time']
@@ -328,11 +332,34 @@ class CompletedAddressesScreen(MDScreen):
                         'completed_time': time_str
                     })
 
-            toast(f"Exported to: {filename}")
+            Clock.schedule_once(lambda dt: toast(f"Exported to: {filename}"), 0)
 
         except Exception as e:
-            toast(f"Export failed: {str(e)}")
+            Clock.schedule_once(lambda dt: toast(f"Export failed: {str(e)}"), 0)
             print(f"Export error: {e}")
+
+    def _get_export_path(self, filename):
+        """Get proper export path for different platforms"""
+        if platform == 'android' and ANDROID_AVAILABLE:
+            try:
+                # Try to use external files directory
+                activity = PythonActivity.mActivity
+                context = activity.getApplicationContext()
+                external_files_dir = context.getExternalFilesDir(None)
+                if external_files_dir:
+                    export_dir = external_files_dir.getAbsolutePath()
+                    return os.path.join(export_dir, filename)
+            except Exception as e:
+                print(f"External files dir failed: {e}")
+            
+            # Fallback to app private directory
+            try:
+                app_path = PythonActivity.mActivity.getFilesDir().getAbsolutePath()
+                return os.path.join(app_path, filename)
+            except Exception:
+                return filename
+        else:
+            return os.path.join(os.path.expanduser("~"), filename)
 
 
 class AddressScreen(MDScreen):
@@ -346,6 +373,9 @@ class AddressScreen(MDScreen):
         self.completion_file = "completed_addresses.json"
         self.file_manager = None
         self.dialog = None
+        self.completion_dialog = None
+        self.payment_dialog = None
+        self.payment_field = None
 
         # SAF helpers
         self.ss = None
@@ -359,7 +389,7 @@ class AddressScreen(MDScreen):
                 self.ss = None
                 self.chooser = None
 
-        # Request permissions on Android (legacy; SAF doesn't require these)
+        # Request permissions on Android
         if platform == 'android' and ANDROID_AVAILABLE:
             Clock.schedule_once(self.request_android_permissions, 0.5)
 
@@ -443,13 +473,21 @@ class AddressScreen(MDScreen):
     def request_android_permissions(self, dt):
         if platform == 'android' and ANDROID_AVAILABLE:
             try:
-                request_permissions([Permission.READ_EXTERNAL_STORAGE, Permission.WRITE_EXTERNAL_STORAGE])
+                request_permissions([
+                    Permission.READ_EXTERNAL_STORAGE, 
+                    Permission.WRITE_EXTERNAL_STORAGE,
+                    Permission.MANAGE_EXTERNAL_STORAGE  # For Android 11+
+                ])
             except Exception as e:
                 print(f"Permission request failed: {e}")
 
     def init_file_manager(self):
         try:
-            self.file_manager = MDFileManager(exit_manager=self.exit_manager, select_path=self.select_path)
+            self.file_manager = MDFileManager(
+                exit_manager=self.exit_manager, 
+                select_path=self.select_path,
+                preview=False  # Disable preview to avoid crashes
+            )
         except Exception as e:
             print(f"Error initializing file manager: {e}")
             self.file_manager = None
@@ -457,6 +495,7 @@ class AddressScreen(MDScreen):
     def open_file_manager(self):
         if platform == 'android' and ANDROID_AVAILABLE and ASK_AVAILABLE and self.chooser:
             try:
+                # Use SAF for modern Android
                 self.chooser.choose_content('*/*')
                 return
             except Exception as e:
@@ -465,20 +504,35 @@ class AddressScreen(MDScreen):
         if self.file_manager is None:
             toast("File manager not available")
             return
+        
         try:
             if platform == 'android':
+                # Use better Android paths for standalone apps
                 android_paths = [
-                    "/storage/emulated/0/Download",
                     "/storage/emulated/0/Documents",
-                    "/sdcard/Download",
+                    "/storage/emulated/0/Download", 
+                    "/storage/emulated/0",
                     "/sdcard/Documents",
-                    "/storage/emulated/0"
+                    "/sdcard/Download",
+                    "/sdcard"
                 ]
                 for path in android_paths:
-                    if os.path.exists(path):
+                    if os.path.exists(path) and os.access(path, os.R_OK):
                         self.file_manager.show(path)
                         return
-                self.file_manager.show("/storage/emulated/0")
+                # If no accessible path found, try app external directory
+                try:
+                    activity = PythonActivity.mActivity
+                    external_files_dir = activity.getApplicationContext().getExternalFilesDir(None)
+                    if external_files_dir:
+                        external_path = external_files_dir.getAbsolutePath()
+                        self.file_manager.show(external_path)
+                        return
+                except Exception:
+                    pass
+                    
+                # Final fallback
+                self.file_manager.show("/")
             else:
                 self.file_manager.show(os.path.expanduser("~"))
         except Exception as e:
@@ -487,182 +541,193 @@ class AddressScreen(MDScreen):
 
     def _on_shared_file_chosen(self, shared_file_list):
         """SAF callback: copy chosen file into app-private cache then load it."""
-        try:
-            if not shared_file_list:
-                toast("No file selected")
-                return
-            if not self.ss:
-                toast("Storage bridge not available")
-                return
+        def process_file():
+            try:
+                if not shared_file_list:
+                    Clock.schedule_once(lambda dt: toast("No file selected"), 0)
+                    return
+                if not self.ss:
+                    Clock.schedule_once(lambda dt: toast("Storage bridge not available"), 0)
+                    return
 
-            private_path = self.ss.copy_from_shared(shared_file_list[0])
-            if not private_path or not os.path.exists(private_path):
-                toast("Could not access the selected file")
-                return
+                private_path = self.ss.copy_from_shared(shared_file_list[0])
+                if not private_path or not os.path.exists(private_path):
+                    Clock.schedule_once(lambda dt: toast("Could not access the selected file"), 0)
+                    return
 
-            lower = private_path.lower()
-            if lower.endswith('.csv'):
-                self.load_csv_file(private_path)
-            elif lower.endswith(('.xlsx', '.xls')):
-                if OPENPYXL_AVAILABLE:
-                    self.load_xlsx_file(private_path)
+                lower = private_path.lower()
+                if lower.endswith('.csv'):
+                    Clock.schedule_once(lambda dt: self.load_csv_file(private_path), 0)
+                elif lower.endswith(('.xlsx', '.xls')):
+                    if OPENPYXL_AVAILABLE:
+                        Clock.schedule_once(lambda dt: self.load_xlsx_file(private_path), 0)
+                    else:
+                        Clock.schedule_once(lambda dt: toast("Excel support not available. Please use CSV."), 0)
                 else:
-                    toast("Excel support not available. Please use CSV.")
-            else:
-                toast("Please select a .csv or .xlsx file")
+                    Clock.schedule_once(lambda dt: toast("Please select a .csv or .xlsx file"), 0)
 
-        except Exception as e:
-            toast(f"Import failed: {e}")
-            print(f"SAF import error: {e}")
+            except Exception as e:
+                Clock.schedule_once(lambda dt: toast(f"Import failed: {e}"), 0)
+                print(f"SAF import error: {e}")
 
-    # MDFileManager may call this off the UI thread on some devices.
-    # Hand off to the main thread before touching any UI.
+        # Run file processing in background thread
+        threading.Thread(target=process_file, daemon=True).start()
+
     def select_path(self, path):
-        self._select_path_ui(path)
+        # Run file loading in background thread to avoid UI blocking
+        threading.Thread(target=self._select_path_background, args=(path,), daemon=True).start()
 
-    @mainthread
-    def _select_path_ui(self, path):
+    def _select_path_background(self, path):
         try:
-            # Close the file manager before processing the selected path
-            self.exit_manager()
+            # Close the file manager first
+            Clock.schedule_once(lambda dt: self.exit_manager(), 0)
+            
             lower = path.lower()
             if lower.endswith(('.xlsx', '.xls')):
                 if OPENPYXL_AVAILABLE:
-                    self.load_xlsx_file(path)
+                    Clock.schedule_once(lambda dt: self.load_xlsx_file(path), 0)
                 else:
-                    # Fallback to minimal reader if available; otherwise notify the user
-                    if hasattr(self, 'load_xlsx_file_minimal'):
-                        self.load_xlsx_file_minimal(path)
-                    else:
-                        toast("Excel support not available. Please use CSV files.")
+                    Clock.schedule_once(lambda dt: toast("Excel support not available. Please use CSV files."), 0)
             elif lower.endswith('.csv'):
-                self.load_csv_file(path)
+                Clock.schedule_once(lambda dt: self.load_csv_file(path), 0)
             else:
-                # Show a message prompting for a supported file type
-                toast("Please select a .csv or .xlsx file")
+                Clock.schedule_once(lambda dt: toast("Please select a .csv or .xlsx file"), 0)
         except Exception as e:
-            toast(f"Error selecting file: {e}")
+            Clock.schedule_once(lambda dt: toast(f"Error selecting file: {e}"), 0)
             print(f"File selection error: {e}")
 
-    @mainthread
     def exit_manager(self, *args):
         """Ensure the file manager is closed on the main thread."""
         if self.file_manager:
-            self.file_manager.close()
+            try:
+                self.file_manager.close()
+            except Exception as e:
+                print(f"Error closing file manager: {e}")
 
+    @mainthread
     def load_xlsx_file(self, file_path):
         if not OPENPYXL_AVAILABLE:
             toast("Excel support not available")
             return
-        try:
-            # FIX: Use data_only=True to avoid style-related errors
-            workbook = load_workbook(
-                file_path,
-                read_only=True,
-                data_only=True  # This prevents style loading issues
-            )
-            worksheet = workbook.active
-
-            # Convert to list immediately to avoid generator issues
+            
+        # Show loading message
+        toast("Loading Excel file...")
+        
+        def load_in_background():
             try:
-                rows = list(worksheet.rows)
-            except Exception as e:
-                print(f"Error reading rows: {e}")
-                # Fallback: read manually row by row
+                # Use more robust loading options
+                workbook = load_workbook(
+                    file_path,
+                    read_only=True,
+                    data_only=True,
+                    keep_links=False
+                )
+                worksheet = workbook.active
+
+                # Convert to list safely
                 rows = []
-                for row in worksheet.iter_rows():
+                try:
+                    for row in worksheet.iter_rows(values_only=True):
+                        if row and any(cell is not None for cell in row):
+                            rows.append(row)
+                except Exception as e:
+                    print(f"Error reading rows: {e}")
+                    # Try alternative method
+                    for row_num in range(1, worksheet.max_row + 1):
+                        try:
+                            row_values = []
+                            for col_num in range(1, worksheet.max_column + 1):
+                                cell = worksheet.cell(row=row_num, column=col_num)
+                                row_values.append(cell.value)
+                            if any(val is not None for val in row_values):
+                                rows.append(tuple(row_values))
+                        except Exception:
+                            continue
+
+                workbook.close()
+
+                if not rows:
+                    Clock.schedule_once(lambda dt: toast("No data found in the file"), 0)
+                    return
+
+                # Process headers
+                headers = [str(cell) if cell is not None else "" for cell in rows[0]]
+                
+                # Find address column
+                address_column_idx = None
+                possible_names = ['address', 'Address', 'ADDRESS', 'street', 'Street', 'location', 'Location']
+                for i, header in enumerate(headers):
+                    if header and str(header).strip() in possible_names:
+                        address_column_idx = i
+                        break
+                if address_column_idx is None:
+                    address_column_idx = 0
+                    if headers and headers[0]:
+                        Clock.schedule_once(lambda dt: toast(f"Using column '{headers[0]}' as addresses"), 0)
+
+                # Extract addresses
+                addresses = []
+                for row in rows[1:]:  # Skip header
                     try:
-                        rows.append(row)
-                    except:
+                        if len(row) > address_column_idx and row[address_column_idx]:
+                            address = str(row[address_column_idx]).strip()
+                            if address and address.lower() not in ['none', 'null', '']:
+                                addresses.append(address)
+                    except Exception:
                         continue
 
-            if not rows:
-                toast("No data found in the file")
-                return
+                # Update UI on main thread
+                Clock.schedule_once(lambda dt: self._update_addresses(addresses), 0)
 
-            # Get headers safely
-            try:
-                headers = []
-                for cell in rows[0]:
-                    try:
-                        value = cell.value
-                        headers.append(str(value) if value is not None else "")
-                    except:
-                        headers.append("")
             except Exception as e:
-                print(f"Error reading headers: {e}")
-                toast("Error reading file headers")
-                return
+                error_msg = str(e)
+                print(f"Excel loading error: {error_msg}")
+                
+                # Provide specific error messages
+                if "CellStyle" in error_msg or "styles" in error_msg:
+                    Clock.schedule_once(lambda dt: toast("Excel file formatting issue. Try saving as CSV instead."), 0)
+                elif "BadZipFile" in error_msg:
+                    Clock.schedule_once(lambda dt: toast("Invalid Excel file format"), 0)
+                elif "PermissionError" in error_msg:
+                    Clock.schedule_once(lambda dt: toast("Cannot access file - check permissions"), 0)
+                else:
+                    Clock.schedule_once(lambda dt: toast(f"Error loading Excel file: {error_msg[:50]}"), 0)
 
-            # Find address column
-            address_column_idx = None
-            possible_names = ['address', 'Address', 'ADDRESS', 'street', 'Street', 'location', 'Location']
-            for i, header in enumerate(headers):
-                if header and str(header).strip() in possible_names:
-                    address_column_idx = i
-                    break
-            if address_column_idx is None:
-                address_column_idx = 0
-                if headers and headers[0]:
-                    toast(f"Using column '{headers[0]}' as addresses")
+        # Run in background thread
+        threading.Thread(target=load_in_background, daemon=True).start()
 
-            # Extract addresses safely
-            self.addresses = []
-            for row_idx, row in enumerate(rows[1:], 1):  # Skip header
-                try:
-                    if len(row) > address_column_idx:
-                        cell = row[address_column_idx]
-                        if cell and cell.value:
-                            address = str(cell.value).strip()
-                            if address and address.lower() != 'none':
-                                self.addresses.append(address)
-                except Exception as e:
-                    print(f"Error reading row {row_idx}: {e}")
-                    continue
-
-            # Close workbook properly
-            try:
-                workbook.close()
-            except:
-                pass
-
-            if self.addresses:
-                self.completed_addresses.clear()
-                self.completed_timestamps.clear()
-                self.completed_outcomes.clear()
-                self.completed_amounts.clear()
-                self.save_completed_addresses()
-                self.create_address_buttons()
-                toast(f"Loaded {len(self.addresses)} addresses")
-            else:
-                toast("No addresses found in the file")
-
-        except Exception as e:
-            error_msg = str(e)
-            print(f"Excel loading error: {error_msg}")
-
-            # Provide specific error messages
-            if "CellStyle" in error_msg or "styles" in error_msg:
-                toast("Excel file formatting issue. Try saving as CSV instead.")
-            elif "BadZipFile" in error_msg:
-                toast("Invalid Excel file format")
-            elif "PermissionError" in error_msg:
-                toast("Cannot access file - check permissions")
-            else:
-                toast(f"Error loading Excel file: {error_msg[:50]}")
-
+    @mainthread  
     def load_csv_file(self, file_path):
-        try:
-            with open(file_path, 'r', encoding='utf-8') as csvfile:
-                sample = csvfile.read(1024)
-                csvfile.seek(0)
-                sniffer = csv.Sniffer()
-                delimiter = sniffer.sniff(sample).delimiter
-
-                reader = csv.reader(csvfile, delimiter=delimiter)
-                rows = list(reader)
+        toast("Loading CSV file...")
+        
+        def load_in_background():
+            try:
+                # Try different encodings
+                encodings = ['utf-8', 'utf-8-sig', 'latin1', 'cp1252']
+                rows = None
+                
+                for encoding in encodings:
+                    try:
+                        with open(file_path, 'r', encoding=encoding) as csvfile:
+                            sample = csvfile.read(1024)
+                            csvfile.seek(0)
+                            sniffer = csv.Sniffer()
+                            delimiter = sniffer.sniff(sample).delimiter
+                            reader = csv.reader(csvfile, delimiter=delimiter)
+                            rows = list(reader)
+                            break
+                    except (UnicodeDecodeError, UnicodeError):
+                        continue
+                    except Exception as e:
+                        print(f"CSV read error with {encoding}: {e}")
+                        continue
+                
                 if not rows:
-                    toast("No data found in the file")
+                    Clock.schedule_once(lambda dt: toast("Could not read CSV file - encoding issue"), 0)
+                    return
+
+                if not rows:
+                    Clock.schedule_once(lambda dt: toast("No data found in the file"), 0)
                     return
 
                 headers = rows[0]
@@ -674,26 +739,36 @@ class AddressScreen(MDScreen):
                         break
                 if address_column_idx is None:
                     address_column_idx = 0
-                    toast(f"Using column '{headers[0]}' as addresses")
+                    Clock.schedule_once(lambda dt: toast(f"Using column '{headers[0]}' as addresses"), 0)
 
-                self.addresses = []
+                addresses = []
                 for row in rows[1:]:
                     if len(row) > address_column_idx and row[address_column_idx].strip():
-                        self.addresses.append(row[address_column_idx].strip())
+                        addresses.append(row[address_column_idx].strip())
 
-                if self.addresses:
-                    self.completed_addresses.clear()
-                    self.completed_timestamps.clear()
-                    self.completed_outcomes.clear()
-                    self.completed_amounts.clear()
-                    self.save_completed_addresses()
-                    self.create_address_buttons()
-                    toast(f"Loaded {len(self.addresses)} addresses")
-                else:
-                    toast("No addresses found in the file")
+                # Update UI on main thread
+                Clock.schedule_once(lambda dt: self._update_addresses(addresses), 0)
 
-        except Exception as e:
-            toast(f"Error loading CSV file: {str(e)}")
+            except Exception as e:
+                Clock.schedule_once(lambda dt: toast(f"Error loading CSV file: {str(e)}"), 0)
+                print(f"CSV load error: {e}")
+
+        # Run in background thread
+        threading.Thread(target=load_in_background, daemon=True).start()
+
+    def _update_addresses(self, addresses):
+        """Update addresses on main thread"""
+        if addresses:
+            self.addresses = addresses
+            self.completed_addresses.clear()
+            self.completed_timestamps.clear()
+            self.completed_outcomes.clear()
+            self.completed_amounts.clear()
+            self.save_completed_addresses()
+            self.create_address_buttons()
+            toast(f"Loaded {len(addresses)} addresses")
+        else:
+            toast("No addresses found in the file")
 
     @mainthread
     def create_address_buttons(self):
@@ -715,13 +790,14 @@ class AddressScreen(MDScreen):
                 height=dp(56)
             )
 
-            # Simplified label without Clock.schedule_once
+            # Fixed label with proper text_size for alignment
             address_label = MDLabel(
                 text=str(address),
                 theme_text_color="Primary",
                 size_hint_x=0.6,
                 halign="left",
                 valign="center",
+                text_size=(None, None),  # This fixes text alignment issues
                 markup=False,
                 shorten=True,
                 shorten_from='right'
@@ -783,43 +859,95 @@ class AddressScreen(MDScreen):
 
     def show_completion_dialog(self, index):
         if index in self.completed_addresses:
+            # Remove completion immediately for better responsiveness
             self.toggle_completion(index, "remove")
             return
+            
         address = self.addresses[index] if index < len(self.addresses) else "Unknown"
-        if not hasattr(self, 'completion_dialog') or not self.completion_dialog:
-            self.completion_dialog = MDDialog(
-                title=f"Mark as Complete",
-                text=f"How was this address completed?\n\n{address}",
-                buttons=[
-                    MDFlatButton(text="CANCEL", on_release=lambda x: self.completion_dialog.dismiss()),
-                    MDFlatButton(text="COMPLETED", on_release=lambda x: self.complete_address(index, "Completed", "")),
-                    MDFlatButton(text="DA", theme_text_color="Error", on_release=lambda x: self.complete_address(index, "DA", "")),
-                    MDFlatButton(text="PIF", theme_text_color="Custom", text_color="green", on_release=lambda x: self.show_payment_dialog(index))
-                ],
-            )
-        else:
-            self.completion_dialog.text = f"How was this address completed?\n\n{address}"
-            self.completion_dialog.buttons[1].bind(on_release=lambda x: self.complete_address(index, "Completed", ""))
-            self.completion_dialog.buttons[2].bind(on_release=lambda x: self.complete_address(index, "DA", ""))
-            self.completion_dialog.buttons[3].bind(on_release=lambda x: self.show_payment_dialog(index))
+        
+        # Create dialog with immediate response buttons
+        self.completion_dialog = MDDialog(
+            title=f"Mark as Complete",
+            text=f"How was this address completed?\n\n{address}",
+            buttons=[
+                MDFlatButton(
+                    text="CANCEL", 
+                    on_release=lambda x: self.completion_dialog.dismiss()
+                ),
+                MDFlatButton(
+                    text="COMPLETED", 
+                    on_release=lambda x: self._quick_complete(index, "Completed", "")
+                ),
+                MDFlatButton(
+                    text="DA", 
+                    theme_text_color="Error", 
+                    on_release=lambda x: self._quick_complete(index, "DA", "")
+                ),
+                MDFlatButton(
+                    text="PIF", 
+                    theme_text_color="Custom", 
+                    text_color="green", 
+                    on_release=lambda x: self.show_payment_dialog(index)
+                )
+            ],
+        )
         self.completion_dialog.open()
+
+    def _quick_complete(self, index, outcome, amount):
+        """Quick completion without blocking UI"""
+        self.completion_dialog.dismiss()
+        
+        # Update immediately for UI responsiveness
+        self.completed_addresses.add(index)
+        self.completed_timestamps[index] = datetime.now().isoformat()
+        self.completed_outcomes[index] = outcome
+        if amount:
+            self.completed_amounts[index] = amount
+            
+        # Update UI immediately
+        self.create_address_buttons()
+        
+        # Save in background
+        threading.Thread(target=self.save_completed_addresses, daemon=True).start()
+        
+        # Show toast
+        if outcome == "PIF" and amount:
+            toast(f"Marked as PIF - £{amount}")
+        else:
+            toast(f"Marked as {outcome}")
 
     def show_payment_dialog(self, index):
         self.completion_dialog.dismiss()
-        if not hasattr(self, 'payment_dialog') or not self.payment_dialog:
-            self.payment_field = MDTextField(hint_text="Enter amount paid (Â£)", size_hint_x=None, width=dp(200), input_filter="float")
-            content = MDBoxLayout(orientation='vertical', spacing=dp(16), adaptive_height=True)
-            content.add_widget(self.payment_field)
-            self.payment_dialog = MDDialog(
-                title="Payment Amount",
-                type="custom",
-                content_cls=content,
-                buttons=[
-                    MDFlatButton(text="CANCEL", on_release=lambda x: self.payment_dialog.dismiss()),
-                    MDFlatButton(text="CONFIRM PIF", theme_text_color="Primary", on_release=lambda x: self.confirm_payment(index)),
-                ],
-            )
-        self.payment_field.text = ""
+        
+        self.payment_field = MDTextField(
+            hint_text="Enter amount paid (£)", 
+            size_hint_x=None, 
+            width=dp(200), 
+            input_filter="float"
+        )
+        content = MDBoxLayout(
+            orientation='vertical', 
+            spacing=dp(16), 
+            adaptive_height=True
+        )
+        content.add_widget(self.payment_field)
+        
+        self.payment_dialog = MDDialog(
+            title="Payment Amount",
+            type="custom",
+            content_cls=content,
+            buttons=[
+                MDFlatButton(
+                    text="CANCEL", 
+                    on_release=lambda x: self.payment_dialog.dismiss()
+                ),
+                MDFlatButton(
+                    text="CONFIRM PIF", 
+                    theme_text_color="Primary", 
+                    on_release=lambda x: self.confirm_payment(index)
+                ),
+            ],
+        )
         self.payment_dialog.open()
 
     def confirm_payment(self, index):
@@ -833,24 +961,9 @@ class AddressScreen(MDScreen):
                 toast("Please enter a valid amount")
                 return
             self.payment_dialog.dismiss()
-            self.complete_address(index, "PIF", f"{amount:.2f}")
+            self._quick_complete(index, "PIF", f"{amount:.2f}")
         except ValueError:
             toast("Please enter a valid number")
-
-    def complete_address(self, index, outcome, amount):
-        if hasattr(self, 'completion_dialog'):
-            self.completion_dialog.dismiss()
-        self.completed_addresses.add(index)
-        self.completed_timestamps[index] = datetime.now().isoformat()
-        self.completed_outcomes[index] = outcome
-        if amount:
-            self.completed_amounts[index] = amount
-        self.save_completed_addresses()
-        self.create_address_buttons()
-        if outcome == "PIF" and amount:
-            toast(f"Marked as PIF - Â£{amount}")
-        else:
-            toast(f"Marked as {outcome}")
 
     def toggle_completion(self, index, action="toggle"):
         if action == "remove" or index in self.completed_addresses:
@@ -859,19 +972,17 @@ class AddressScreen(MDScreen):
             self.completed_outcomes.pop(index, None)
             self.completed_amounts.pop(index, None)
             toast("Marked as incomplete")
-        self.save_completed_addresses()
+            
+        # Update UI immediately
         self.create_address_buttons()
+        
+        # Save in background
+        threading.Thread(target=self.save_completed_addresses, daemon=True).start()
 
     def save_completed_addresses(self):
         try:
-            if platform == 'android' and ANDROID_AVAILABLE:
-                try:
-                    app_path = PythonActivity.mActivity.getFilesDir().getAbsolutePath()
-                    file_path = os.path.join(app_path, self.completion_file)
-                except Exception:
-                    file_path = self.completion_file
-            else:
-                file_path = self.completion_file
+            # Get proper file path
+            file_path = self._get_completion_file_path()
 
             data = {
                 'completed_addresses': list(self.completed_addresses),
@@ -880,30 +991,25 @@ class AddressScreen(MDScreen):
                 'completed_amounts': self.completed_amounts
             }
             with open(file_path, 'w') as f:
-                json.dump(data, f)
+                json.dump(data, f, indent=2)
         except Exception as e:
             print(f"Error saving completion data: {e}")
 
     def load_completed_addresses(self):
         try:
-            if platform == 'android' and ANDROID_AVAILABLE:
-                try:
-                    app_path = PythonActivity.mActivity.getFilesDir().getAbsolutePath()
-                    file_path = os.path.join(app_path, self.completion_file)
-                except Exception:
-                    file_path = self.completion_file
-            else:
-                file_path = self.completion_file
+            file_path = self._get_completion_file_path()
 
             if os.path.exists(file_path):
                 with open(file_path, 'r') as f:
                     data = json.load(f)
                     if isinstance(data, list):
+                        # Old format compatibility
                         self.completed_addresses = set(data)
                         self.completed_timestamps = {}
                         self.completed_outcomes = {}
                         self.completed_amounts = {}
                     else:
+                        # New format
                         self.completed_addresses = set(data.get('completed_addresses', []))
                         self.completed_timestamps = {int(k): v for k, v in data.get('completed_timestamps', {}).items()}
                         self.completed_outcomes = {int(k): v for k, v in data.get('completed_outcomes', {}).items()}
@@ -915,6 +1021,20 @@ class AddressScreen(MDScreen):
             self.completed_outcomes = {}
             self.completed_amounts = {}
 
+    def _get_completion_file_path(self):
+        """Get proper file path for completion data"""
+        if platform == 'android' and ANDROID_AVAILABLE:
+            try:
+                # Use app private directory for data persistence
+                app_path = PythonActivity.mActivity.getFilesDir().getAbsolutePath()
+                return os.path.join(app_path, self.completion_file)
+            except Exception:
+                # Fallback to current directory
+                return self.completion_file
+        else:
+            # Desktop: use user home directory
+            return os.path.join(os.path.expanduser("~"), self.completion_file)
+
     def refresh_addresses(self):
         if self.addresses:
             self.create_address_buttons()
@@ -924,13 +1044,51 @@ class AddressScreen(MDScreen):
 
     def show_initial_message(self):
         if not self.addresses:
-            welcome_layout = MDBoxLayout(orientation='vertical', adaptive_height=True, spacing=dp(20), padding=dp(20))
-            message_card = MDCard(size_hint_y=None, height=dp(200), elevation=3, padding=dp(24), radius=[12])
-            message_content = MDBoxLayout(orientation='vertical', adaptive_height=True, spacing=dp(16), size_hint_y=None, height=dp(152))
-            title_label = MDLabel(text="Welcome to Address Navigator!", theme_text_color="Primary", font_style="H6", halign="center", size_hint_y=None, height=dp(32))
+            welcome_layout = MDBoxLayout(
+                orientation='vertical', 
+                adaptive_height=True, 
+                spacing=dp(20), 
+                padding=dp(20)
+            )
+            message_card = MDCard(
+                size_hint_y=None, 
+                height=dp(200), 
+                elevation=3, 
+                padding=dp(24), 
+                radius=[12]
+            )
+            message_content = MDBoxLayout(
+                orientation='vertical', 
+                adaptive_height=True, 
+                spacing=dp(16), 
+                size_hint_y=None, 
+                height=dp(152)
+            )
+            title_label = MDLabel(
+                text="Welcome to Address Navigator!", 
+                theme_text_color="Primary", 
+                font_style="H6", 
+                halign="center",
+                text_size=(None, None),  # Fixed text alignment
+                size_hint_y=None, 
+                height=dp(32)
+            )
             instruction_text = "Load an Excel (.xlsx) or CSV file with addresses to get started." if OPENPYXL_AVAILABLE else "Load a CSV file with addresses to get started."
-            instruction_label = MDLabel(text=instruction_text, theme_text_color="Secondary", halign="center", size_hint_y=None, height=dp(48))
-            load_button = MDRaisedButton(text="Load File", size_hint=(None, None), size=(dp(140), dp(40)), pos_hint={"center_x": 0.5}, on_release=lambda x: self.open_file_manager())
+            instruction_label = MDLabel(
+                text=instruction_text, 
+                theme_text_color="Secondary", 
+                halign="center",
+                text_size=(None, None),  # Fixed text alignment
+                size_hint_y=None, 
+                height=dp(48)
+            )
+            load_button = MDRaisedButton(
+                text="Load File", 
+                size_hint=(None, None), 
+                size=(dp(140), dp(40)), 
+                pos_hint={"center_x": 0.5}, 
+                on_release=lambda x: self.open_file_manager()
+            )
             message_content.add_widget(title_label)
             message_content.add_widget(instruction_label)
             message_content.add_widget(load_button)
@@ -963,6 +1121,9 @@ class AddressNavigatorApp(MDApp):
     def on_start(self):
         try:
             print("App started successfully")
+            # Load any saved addresses on startup
+            if hasattr(self.address_screen, 'addresses') and self.address_screen.addresses:
+                self.address_screen.create_address_buttons()
         except Exception as e:
             print(f"Error on start: {e}")
 
