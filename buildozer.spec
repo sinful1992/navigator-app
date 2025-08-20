@@ -9,7 +9,8 @@ entrypoint = main.py
 
 # Minimal requirements to avoid dependency conflicts
 # Remove openpyxl temporarily if it continues causing issues
-requirements = python3,kivy==2.3.0,kivymd==1.2.0,androidstorage4kivy
+# buildozer.spec
+requirements = python3,kivy==2.3.0,kivymd==1.2.0,androidstorage4kivy,pyjnius,openpyxl==3.1.2,et_xmlfile==1.1.0
 
 # Alternative: Include openpyxl with data_only fix
 # requirements = python3,kivy==2.3.0,kivymd==1.2.0,androidstorage4kivy,openpyxl==3.0.10
