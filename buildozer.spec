@@ -4,49 +4,44 @@ package.name = addressnavigator
 package.domain = org.example
 
 source.dir = .
-version = 1.0.1
 entrypoint = main.py
+version = 1.0.1
 
-# Minimal requirements to avoid dependency conflicts
-# Remove openpyxl temporarily if it continues causing issues
-# buildozer.spec
+# Runtime deps (APK must include these; Pydroid ships some of them by default)
+# - androidstorage4kivy + pyjnius = SAF file picker + Java bridge
+# - openpyxl is optional now (your code falls back to a pure-Python XLSX reader),
+#   but we keep et_xmlfile to satisfy it if present.
 requirements = python3,kivy==2.3.0,kivymd==1.2.0,androidstorage4kivy,pyjnius,openpyxl==3.1.2,et_xmlfile==1.1.0
 
-# Alternative: Include openpyxl with data_only fix
-# requirements = python3,kivy==2.3.0,kivymd==1.2.0,androidstorage4kivy,openpyxl==3.0.10
-
+# Android targets
 android.api = 35
 android.minapi = 24
 android.ndk_api = 24
 
-# Minimal permissions - SAF handles file access without broad storage permissions
+# Permissions: SAF gives read access to user-picked files — no broad storage perms needed
 android.permissions = INTERNET
 
+# Toolchain pins
 android.build_tools_version = 35.0.0
-android.gradle_version = 8.4
 android.enable_androidx = True
 
+# App/device config
 orientation = portrait
 android.archs = arm64-v8a,armeabi-v7a
-
-android.allow_backup = True
-android.adaptive_icon = True
-
-# Build optimizations
-android.java_options = -Xmx4g
-android.gradle_options = --daemon --parallel --configure-on-demand
-
 bootstrap = sdl2
 
-# Icon paths (create these files)
+# Optional branding (uncomment and provide files if you have them)
 # icon.filename = %(source.dir)s/icon.png
 # presplash.filename = %(source.dir)s/presplash.png
+
+# Backup behavior
+android.allow_backup = True
 
 [buildozer]
 log_level = 2
 
 [python-for-android]
+# Use the develop branch (as you had). The workflow installs NDK r25b for p4a.
 p4a.branch = develop
-ndk_version = 26d
-p4a.bootstrap = sdl2
-p4a.arch = arm64-v8a
+# Align with workflow (or omit this line and let the workflow’s NDK win):
+ndk_version = 25b
