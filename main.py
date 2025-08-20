@@ -12,7 +12,7 @@ from kivymd.uix.textfield import MDTextField
 from kivymd.uix.filemanager import MDFileManager
 from kivymd.toast import toast
 from kivy.metrics import dp
-from kivy.clock import Clock
+from kivy.clock import Clock, mainthread
 from kivy.utils import platform
 import csv
 import webbrowser
@@ -201,7 +201,7 @@ class CompletedAddressesScreen(MDScreen):
         if item['amount']:
             amount_row = MDBoxLayout(orientation='horizontal', size_hint_y=None, height=dp(24), spacing=dp(8))
             amount_label = MDLabel(
-                text=f"Amount: £{item['amount']}",
+                text=f"Amount: Â£{item['amount']}",
                 theme_text_color="Primary",
                 font_style="Caption",
                 size_hint_x=0.7,
@@ -515,27 +515,38 @@ class AddressScreen(MDScreen):
             toast(f"Import failed: {e}")
             print(f"SAF import error: {e}")
 
+    # MDFileManager may call this off the UI thread on some devices.
+    # Hand off to the main thread before touching any UI.
     def select_path(self, path):
-        """Legacy/desktop handler when MDFileManager is used."""
+        self._select_path_ui(path)
+
+    @mainthread
+    def _select_path_ui(self, path):
         try:
+            # Close the file manager before processing the selected path
             self.exit_manager()
-            if path.lower().endswith(('.xlsx', '.xls')):
+            lower = path.lower()
+            if lower.endswith(('.xlsx', '.xls')):
                 if OPENPYXL_AVAILABLE:
                     self.load_xlsx_file(path)
                 else:
-                    toast("Excel support not available. Please use CSV files.")
-            elif path.lower().endswith('.csv'):
+                    # Fallback to minimal reader if available; otherwise notify the user
+                    if hasattr(self, 'load_xlsx_file_minimal'):
+                        self.load_xlsx_file_minimal(path)
+                    else:
+                        toast("Excel support not available. Please use CSV files.")
+            elif lower.endswith('.csv'):
                 self.load_csv_file(path)
             else:
-                if OPENPYXL_AVAILABLE:
-                    toast("Please select an Excel file (.xlsx, .xls) or CSV file")
-                else:
-                    toast("Please select a CSV file")
+                # Show a message prompting for a supported file type
+                toast("Please select a .csv or .xlsx file")
         except Exception as e:
-            toast(f"Error selecting file: {str(e)}")
+            toast(f"Error selecting file: {e}")
             print(f"File selection error: {e}")
 
+    @mainthread
     def exit_manager(self, *args):
+        """Ensure the file manager is closed on the main thread."""
         if self.file_manager:
             self.file_manager.close()
 
@@ -546,12 +557,12 @@ class AddressScreen(MDScreen):
         try:
             # FIX: Use data_only=True to avoid style-related errors
             workbook = load_workbook(
-                file_path, 
+                file_path,
                 read_only=True,
                 data_only=True  # This prevents style loading issues
             )
             worksheet = workbook.active
-            
+
             # Convert to list immediately to avoid generator issues
             try:
                 rows = list(worksheet.rows)
@@ -564,7 +575,7 @@ class AddressScreen(MDScreen):
                         rows.append(row)
                     except:
                         continue
-            
+
             if not rows:
                 toast("No data found in the file")
                 return
@@ -582,7 +593,7 @@ class AddressScreen(MDScreen):
                 print(f"Error reading headers: {e}")
                 toast("Error reading file headers")
                 return
-            
+
             # Find address column
             address_column_idx = None
             possible_names = ['address', 'Address', 'ADDRESS', 'street', 'Street', 'location', 'Location']
@@ -629,7 +640,7 @@ class AddressScreen(MDScreen):
         except Exception as e:
             error_msg = str(e)
             print(f"Excel loading error: {error_msg}")
-            
+
             # Provide specific error messages
             if "CellStyle" in error_msg or "styles" in error_msg:
                 toast("Excel file formatting issue. Try saving as CSV instead.")
@@ -684,6 +695,7 @@ class AddressScreen(MDScreen):
         except Exception as e:
             toast(f"Error loading CSV file: {str(e)}")
 
+    @mainthread
     def create_address_buttons(self):
         self.address_layout.clear_widgets()
         for i, address in enumerate(self.addresses):
@@ -702,8 +714,8 @@ class AddressScreen(MDScreen):
                 size_hint_y=None,
                 height=dp(56)
             )
-            
-            # FIX: Simplified label without Clock.schedule_once
+
+            # Simplified label without Clock.schedule_once
             address_label = MDLabel(
                 text=str(address),
                 theme_text_color="Primary",
@@ -795,7 +807,7 @@ class AddressScreen(MDScreen):
     def show_payment_dialog(self, index):
         self.completion_dialog.dismiss()
         if not hasattr(self, 'payment_dialog') or not self.payment_dialog:
-            self.payment_field = MDTextField(hint_text="Enter amount paid (£)", size_hint_x=None, width=dp(200), input_filter="float")
+            self.payment_field = MDTextField(hint_text="Enter amount paid (Â£)", size_hint_x=None, width=dp(200), input_filter="float")
             content = MDBoxLayout(orientation='vertical', spacing=dp(16), adaptive_height=True)
             content.add_widget(self.payment_field)
             self.payment_dialog = MDDialog(
@@ -836,7 +848,7 @@ class AddressScreen(MDScreen):
         self.save_completed_addresses()
         self.create_address_buttons()
         if outcome == "PIF" and amount:
-            toast(f"Marked as PIF - £{amount}")
+            toast(f"Marked as PIF - Â£{amount}")
         else:
             toast(f"Marked as {outcome}")
 
