@@ -2,12 +2,12 @@ name: Android (Buildozer) → GitHub Release
 
 on:
   push:
-    branches: [ "main" ]           # Nightly builds from main
-    tags:     [ "v*" ]             # Versioned releases when you push tags like v1.2.3
-  workflow_dispatch:                # Manual run
+    branches: [ "main" ]
+    tags:     [ "v*" ]
+  workflow_dispatch:
 
 permissions:
-  contents: write                   # Required for creating/updating releases
+  contents: write
 
 concurrency:
   group: release-${{ github.ref }}
@@ -17,7 +17,7 @@ jobs:
   build-and-release:
     runs-on: ubuntu-latest
     env:
-      DOCKER_BUILDKIT: "0"          # Defensive: avoid BuildKit quirks with pulls
+      DOCKER_BUILDKIT: "0"
 
     steps:
       - name: Checkout
@@ -25,7 +25,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      # Optional: cache Buildozer/Gradle dirs across runs to speed up builds
       - name: Cache Buildozer & Gradle
         uses: actions/cache@v4
         with:
@@ -37,21 +36,30 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-buildozer-
 
-      # Fail early if the spec isn't where we expect it (repo root by default)
-      - name: Verify buildozer.spec is in repo root
+      # 🔧 Ensure host cache dirs exist and are writable by container user uid=1000
+      - name: Prepare writable cache dirs
         run: |
-          if [ ! -f buildozer.spec ]; then
-            echo "::error::buildozer.spec not found in repository root."
-            echo "Contents of current directory:"
-            ls -la
-            exit 1
-          fi
+          mkdir -p "$HOME/.buildozer" "$HOME/.buildozer/cache" "$HOME/.gradle"
+          sudo chown -R 1000:1000 "$HOME/.buildozer" "$HOME/.gradle"
 
-      # Build inside the GHCR Buildozer image; set workdir to the mount path
-      # NOTE: The image entrypoint is 'buildozer', so pass only 'android debug'
-      - name: Build APK (debug) with Buildozer in Docker (via GHCR)
+      - name: Verify buildozer.spec exists (host)
+        run: |
+          test -f buildozer.spec || (echo "::error::buildozer.spec not found at repo root"; ls -la; exit 1)
+
+      # Optional: sanity check inside the container
+      - name: Container pre-flight check
         run: |
           sudo docker pull ghcr.io/kivy/buildozer:latest
+          sudo docker run --rm \
+            --entrypoint /bin/sh \
+            -w /home/user/app \
+            -v "$PWD":/home/user/app \
+            ghcr.io/kivy/buildozer:latest \
+            -lc 'pwd; ls -la; [ -f buildozer.spec ] && echo "OK: buildozer.spec present" || (echo "MISSING: buildozer.spec"; exit 1)'
+
+      # ✅ Build (image entrypoint is `buildozer`; pass only 'android debug')
+      - name: Build APK (debug)
+        run: |
           sudo docker run --rm \
             -e BUILDOZER_WARN_ON_ROOT=0 \
             -w /home/user/app \
@@ -67,37 +75,29 @@ jobs:
           APK="$(ls -1t bin/*.apk 2>/dev/null | head -n1 || true)"
           if [ -z "$APK" ]; then
             echo "::error::No APK found in bin/. Build likely failed."
-            echo "bin/ contents:"
             ls -la bin/ || true
             exit 1
           fi
           echo "apk_path=$APK" >> "$GITHUB_OUTPUT"
           echo "Found APK: $APK"
 
-      # If this is a tag push (e.g., v1.2.3), create/update a standard release with that tag
       - name: Create/Upload versioned release (on tag)
         if: startsWith(github.ref, 'refs/tags/')
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${GITHUB_REF##*/}"
-          NAME="$TAG"
-          NOTES="Automated release for $TAG"
-          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" -t "$NAME" -n "$NOTES"
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" -t "$TAG" -n "Automated release for $TAG"
           gh release upload "$TAG" "${{ steps.apk.outputs.apk_path }}" --clobber
 
-      # Otherwise (push to main / manual run), publish/update a rolling "nightly" pre-release
       - name: Create/Upload nightly pre-release (on main)
         if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="nightly"
-          TITLE="nightly"
-          NOTES="Nightly build: $(date -u +'%Y-%m-%d %H:%M:%SZ')"
-          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" -p -t "$TITLE" -n "$NOTES"
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" -p -t "$TAG" -n "Nightly build"
           gh release upload "$TAG" "${{ steps.apk.outputs.apk_path }}" --clobber
 
       - name: Summary
-        run: |
-          echo "Uploaded APK: ${{ steps.apk.outputs.apk_path }}"
+        run: echo "Uploaded APK: ${{ steps.apk.outputs.apk_path }}"
