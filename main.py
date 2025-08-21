@@ -318,7 +318,7 @@ class PersistentSearchField(MDTextField):
         super().__init__(**kwargs)
         self.screen_instance = screen_instance
         self._search_event = None
-        self.hint_text = "🔍 Type to search addresses..."
+        self.hint_text = "Type to search addresses..."
         self.size_hint_y = None
         self.height = dp(48)
         self.font_size = '16sp'
