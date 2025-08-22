@@ -654,6 +654,7 @@ class UltraFastAddressScreen(MDScreen):
         # Optimizations
         self.lazy_loader = UltraFastLazyLoader(batch_size=25)
         self._widget_pool = deque(maxlen=50)
+        self._card_refs = {}
         self._cached_sorted_addresses = None
         self._addresses_dirty = True
 
@@ -752,6 +753,7 @@ class UltraFastAddressScreen(MDScreen):
     def _return_card_to_pool(self, card):
         """Return card to pool"""
         if len(self._widget_pool) < self._widget_pool.maxlen:
+            self._card_refs.pop(card.original_index, None)
             # Reset card
             card.opacity = 1
             card.md_bg_color = (1, 1, 1, 1)
@@ -830,6 +832,7 @@ class UltraFastAddressScreen(MDScreen):
         self.lazy_loader.clear_queue()
 
         # Remove existing widgets (including welcome card)
+        self._card_refs.clear()
         for child in self.address_layout.children[:]:
             if isinstance(child, HighPerformanceAddressCard):
                 self.address_layout.remove_widget(child)
@@ -884,6 +887,7 @@ class UltraFastAddressScreen(MDScreen):
             callback_action=self._handle_action,
             callback_cancel=self.cancel_active_fast
         )
+        self._card_refs[original_index] = card
         return card
 
     def _handle_action(self, index, action):
@@ -904,7 +908,7 @@ class UltraFastAddressScreen(MDScreen):
         self.active_address_index = index
         self.get_sorted_addresses_cached.cache_clear()
 
-        card = self._find_card(index)
+        card = self._card_refs.get(index)
         if card:
             self.address_layout.remove_widget(card)
             # Add to top so active item is first
@@ -918,31 +922,27 @@ class UltraFastAddressScreen(MDScreen):
         threading.Thread(target=self.save_completion_data, daemon=True).start()
 
     def _find_card(self, index):
-        for child in self.address_layout.children:
-            if isinstance(child, HighPerformanceAddressCard) and child.original_index == index:
-                return child
-        return None
+        return self._card_refs.get(index)
 
     def _update_specific_cards(self, indices):
         """Update only specific cards for performance"""
-        for child in self.address_layout.children:
-            if isinstance(child, HighPerformanceAddressCard):
-                if child.original_index in indices:
-                    # Re-update this card
-                    is_active = child.original_index == self.active_address_index
-                    is_completed = child.original_index in self.completed_addresses
-                    
-                    child.fast_update(
-                        child.original_index,
-                        child.address,
-                        is_active,
-                        is_completed,
-                        self.completed_outcomes,
-                        self.completed_amounts,
-                        self.navigate_to_address,
-                        self._handle_action,
-                        self.cancel_active_fast
-                    )
+        for idx in indices:
+            card = self._card_refs.get(idx)
+            if card:
+                is_active = idx == self.active_address_index
+                is_completed = idx in self.completed_addresses
+
+                card.fast_update(
+                    idx,
+                    card.address,
+                    is_active,
+                    is_completed,
+                    self.completed_outcomes,
+                    self.completed_amounts,
+                    self.navigate_to_address,
+                    self._handle_action,
+                    self.cancel_active_fast
+                )
 
     def cancel_active_fast(self):
         """OPTIMIZED: Cancel active address with instant UI feedback"""
