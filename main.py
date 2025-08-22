@@ -58,9 +58,10 @@ if platform == 'android':
 
 class HighPerformanceAddressCard(MDCard):
     """Ultra-optimized reusable address card widget with minimal overhead"""
-    __slots__ = ('original_index', 'address', 'is_active', 'is_completed', 'card_layout', 
-                 'top_row', 'address_label', 'status_label', 'button_row', 'nav_button', 
-                 'action_button', 'cancel_button', 'spacer', '_cached_height', '_last_state')
+    __slots__ = ('original_index', 'address', 'is_active', 'is_completed', 'card_layout',
+                 'top_row', 'address_label', 'status_label', 'button_row', 'nav_button',
+                 'edit_button', 'action_button', 'cancel_button', 'spacer',
+                 '_cached_height', '_last_state')
 
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
@@ -133,6 +134,13 @@ class HighPerformanceAddressCard(MDCard):
             font_size='12sp'
         )
 
+        self.edit_button = MDFlatButton(
+            text="Edit",
+            size_hint=(None, None),
+            size=(dp(60), dp(28)),
+            font_size='12sp'
+        )
+
         self.action_button = MDFlatButton(
             size_hint=(None, None),
             size=(dp(75), dp(28)),
@@ -156,9 +164,9 @@ class HighPerformanceAddressCard(MDCard):
         self.card_layout.add_widget(self.button_row)
         self.add_widget(self.card_layout)
 
-    def fast_update(self, original_index, address, is_active, is_completed, 
-                   completed_outcomes, completed_amounts, callback_nav, 
-                   callback_action, callback_cancel):
+    def fast_update(self, original_index, address, is_active, is_completed,
+                   completed_outcomes, completed_amounts, callback_nav,
+                   callback_action, callback_cancel, callback_edit):
         """Ultra-fast update with state caching"""
         current_state = (original_index, is_active, is_completed, 
                         completed_outcomes.get(original_index), 
@@ -174,23 +182,23 @@ class HighPerformanceAddressCard(MDCard):
         self.is_active = is_active
         self.is_completed = is_completed
 
-        # Update address text (minimal formatting)
+        # Update address text with numbering
+        display_text = f"{original_index + 1}. {address}"
         if is_active and not is_completed:
-            self.address_label.text = f"► {address}"
+            self.address_label.text = f"► {display_text}"
             self.address_label.font_style = "Body1"
         elif is_completed:
-            outcome = completed_outcomes.get(original_index, "Done")
-            self.address_label.text = address
+            self.address_label.text = display_text
             self.address_label.font_style = "Body2"
         else:
-            self.address_label.text = address
+            self.address_label.text = display_text
             self.address_label.font_style = "Body2"
 
         # Fast color and status update
         self._fast_update_appearance(completed_outcomes, completed_amounts)
 
         # Update buttons efficiently
-        self._fast_update_buttons(callback_nav, callback_action, callback_cancel)
+        self._fast_update_buttons(callback_nav, callback_action, callback_cancel, callback_edit)
 
     def _fast_update_appearance(self, completed_outcomes, completed_amounts):
         """Ultra-fast appearance update"""
@@ -227,14 +235,20 @@ class HighPerformanceAddressCard(MDCard):
             self.status_label.text = "PENDING"
             self.status_label.theme_text_color = "Secondary"
 
-    def _fast_update_buttons(self, callback_nav, callback_action, callback_cancel):
+    def _fast_update_buttons(self, callback_nav, callback_action, callback_cancel, callback_edit):
         """Ultra-fast button update"""
         # Clear and rebuild button row efficiently
         self.button_row.clear_widgets()
 
-        # Update nav button (always present)
+        # Update nav and edit buttons (always present)
         self.nav_button.unbind()
         self.nav_button.bind(on_release=lambda x: callback_nav(self.address, self.original_index))
+
+        self.edit_button.unbind()
+        self.edit_button.bind(on_release=lambda x: callback_edit(self.original_index))
+
+        self.button_row.add_widget(self.nav_button)
+        self.button_row.add_widget(self.edit_button)
 
         if self.is_completed:
             self.action_button.text = "Undo"
@@ -242,7 +256,6 @@ class HighPerformanceAddressCard(MDCard):
             self.action_button.unbind()
             self.action_button.bind(on_release=lambda x: callback_action(self.original_index, "undo"))
 
-            self.button_row.add_widget(self.nav_button)
             self.button_row.add_widget(self.spacer)
             self.button_row.add_widget(self.action_button)
 
@@ -256,7 +269,6 @@ class HighPerformanceAddressCard(MDCard):
             self.cancel_button.unbind()
             self.cancel_button.bind(on_release=lambda x: callback_cancel())
 
-            self.button_row.add_widget(self.nav_button)
             self.button_row.add_widget(self.action_button)
             self.button_row.add_widget(self.cancel_button)
 
@@ -266,7 +278,6 @@ class HighPerformanceAddressCard(MDCard):
             self.action_button.unbind()
             self.action_button.bind(on_release=lambda x: callback_action(self.original_index, "set_active"))
 
-            self.button_row.add_widget(self.nav_button)
             self.button_row.add_widget(self.spacer)
             self.button_row.add_widget(self.action_button)
 
@@ -489,7 +500,7 @@ class OptimizedCompletedScreen(MDScreen):
         # Top row
         top_row = MDBoxLayout(orientation='horizontal', size_hint_y=None, height=dp(24))
         address_label = MDLabel(
-            text=item['address'],
+            text=f"{item['index'] + 1}. {item['address']}",
             theme_text_color="Primary",
             size_hint_x=0.65,
             shorten=True,
@@ -654,17 +665,21 @@ class UltraFastAddressScreen(MDScreen):
         # Optimizations
         self.lazy_loader = UltraFastLazyLoader(batch_size=25)
         self._widget_pool = deque(maxlen=50)
+        self._card_refs = {}
         self._cached_sorted_addresses = None
         self._addresses_dirty = True
 
         # File handling
         self.completion_file = "completed_addresses.json"
+        self.addresses_file = "addresses.json"
         self.file_manager = None
 
         # Pre-created dialogs
         self.completion_dialog = None
         self.payment_dialog = None
         self.payment_field = None
+        self.edit_dialog = None
+        self.edit_field = None
         self.search_query = ""
 
         # Android storage
@@ -682,8 +697,12 @@ class UltraFastAddressScreen(MDScreen):
             Clock.schedule_once(self.request_permissions, 0.5)
         
         self.load_completion_data()
+        self.load_address_list()
         self._setup_ui()
-        self._show_welcome()
+        if self.addresses:
+            self.update_ui_fast()
+        else:
+            self._show_welcome()
 
     def _setup_ui(self):
         main_layout = MDBoxLayout(orientation='vertical')
@@ -752,6 +771,7 @@ class UltraFastAddressScreen(MDScreen):
     def _return_card_to_pool(self, card):
         """Return card to pool"""
         if len(self._widget_pool) < self._widget_pool.maxlen:
+            self._card_refs.pop(card.original_index, None)
             # Reset card
             card.opacity = 1
             card.md_bg_color = (1, 1, 1, 1)
@@ -764,31 +784,16 @@ class UltraFastAddressScreen(MDScreen):
         Animation(opacity=target, duration=0.2).start(self.progress)
 
     @lru_cache(maxsize=1)
-    def get_sorted_addresses_cached(self, addresses_hash, completed_hash, active_idx):
-        """Cached address sorting for performance"""
+    def get_sorted_addresses_cached(self, addresses_hash):
+        """Cached address order preserving original sequence"""
         if not self.addresses:
             return []
-
-        active_items = []
-        pending_items = []
-        completed_items = []
-
-        for i, address in enumerate(self.addresses):
-            item = (i, address)
-            if i == self.active_address_index:
-                active_items.append(item)
-            elif i in self.completed_addresses:
-                completed_items.append(item)
-            else:
-                pending_items.append(item)
-
-        return active_items + pending_items + completed_items
+        return list(enumerate(self.addresses))
 
     def get_sorted_addresses(self):
-        """Get sorted addresses with caching"""
+        """Get addresses while preserving original order"""
         addresses_hash = hash(tuple(self.addresses)) if self.addresses else 0
-        completed_hash = hash(frozenset(self.completed_addresses))
-        return self.get_sorted_addresses_cached(addresses_hash, completed_hash, self.active_address_index)
+        return self.get_sorted_addresses_cached(addresses_hash)
 
     def filter_existing_cards(self):
         """Ultra-fast filtering by hiding/showing existing cards without rebuilding"""
@@ -830,6 +835,7 @@ class UltraFastAddressScreen(MDScreen):
         self.lazy_loader.clear_queue()
 
         # Remove existing widgets (including welcome card)
+        self._card_refs.clear()
         for child in self.address_layout.children[:]:
             if isinstance(child, HighPerformanceAddressCard):
                 self.address_layout.remove_widget(child)
@@ -882,8 +888,10 @@ class UltraFastAddressScreen(MDScreen):
             completed_amounts=self.completed_amounts,
             callback_nav=self.navigate_to_address,
             callback_action=self._handle_action,
-            callback_cancel=self.cancel_active_fast
+            callback_cancel=self.cancel_active_fast,
+            callback_edit=self.show_edit_dialog
         )
+        self._card_refs[original_index] = card
         return card
 
     def _handle_action(self, index, action):
@@ -904,45 +912,36 @@ class UltraFastAddressScreen(MDScreen):
         self.active_address_index = index
         self.get_sorted_addresses_cached.cache_clear()
 
-        card = self._find_card(index)
-        if card:
-            self.address_layout.remove_widget(card)
-            # Add to top so active item is first
-            self.address_layout.add_widget(card, index=len(self.address_layout.children))
-
         indices = [index]
         if previous is not None:
             indices.append(previous)
-        
+
         self._update_specific_cards(indices)
         threading.Thread(target=self.save_completion_data, daemon=True).start()
 
     def _find_card(self, index):
-        for child in self.address_layout.children:
-            if isinstance(child, HighPerformanceAddressCard) and child.original_index == index:
-                return child
-        return None
+        return self._card_refs.get(index)
 
     def _update_specific_cards(self, indices):
         """Update only specific cards for performance"""
-        for child in self.address_layout.children:
-            if isinstance(child, HighPerformanceAddressCard):
-                if child.original_index in indices:
-                    # Re-update this card
-                    is_active = child.original_index == self.active_address_index
-                    is_completed = child.original_index in self.completed_addresses
-                    
-                    child.fast_update(
-                        child.original_index,
-                        child.address,
-                        is_active,
-                        is_completed,
-                        self.completed_outcomes,
-                        self.completed_amounts,
-                        self.navigate_to_address,
-                        self._handle_action,
-                        self.cancel_active_fast
-                    )
+        for idx in indices:
+            card = self._card_refs.get(idx)
+            if card:
+                is_active = idx == self.active_address_index
+                is_completed = idx in self.completed_addresses
+
+                card.fast_update(
+                    idx,
+                    card.address,
+                    is_active,
+                    is_completed,
+                    self.completed_outcomes,
+                    self.completed_amounts,
+                    self.navigate_to_address,
+                    self._handle_action,
+                    self.cancel_active_fast,
+                    self.show_edit_dialog
+                )
 
     def cancel_active_fast(self):
         """OPTIMIZED: Cancel active address with instant UI feedback"""
@@ -965,7 +964,8 @@ class UltraFastAddressScreen(MDScreen):
                 self.completed_amounts,
                 self.navigate_to_address,
                 self._handle_action,
-                self.cancel_active_fast
+                self.cancel_active_fast,
+                self.show_edit_dialog
             )
         
         # Clear cache and save data in background
@@ -1007,6 +1007,49 @@ class UltraFastAddressScreen(MDScreen):
             webbrowser.open(f"https://www.google.com/maps/search/{encoded_address}")
         except:
             pass
+
+    def show_edit_dialog(self, index):
+        """Display dialog to edit an address"""
+        if index >= len(self.addresses):
+            return
+        if not self.edit_dialog:
+            self._create_edit_dialog()
+        self._current_edit_index = index
+        self.edit_field.text = self.addresses[index]
+        self.edit_dialog.open()
+
+    def _create_edit_dialog(self):
+        self.edit_field = MDTextField(
+            hint_text="Enter address",
+            multiline=True,
+            size_hint_x=None,
+            width=dp(350),
+            font_size='14sp'
+        )
+        content = MDBoxLayout(orientation='vertical', spacing=dp(12), adaptive_height=True)
+        content.add_widget(self.edit_field)
+        self.edit_dialog = MDDialog(
+            title="Edit Address",
+            type="custom",
+            content_cls=content,
+            buttons=[
+                MDFlatButton(text="Cancel", on_release=lambda x: self.edit_dialog.dismiss()),
+                MDFlatButton(text="Save", theme_text_color="Primary", on_release=lambda x: self._save_address_edit()),
+            ],
+        )
+
+    def _save_address_edit(self):
+        new_addr = self.edit_field.text.strip()
+        idx = getattr(self, '_current_edit_index', None)
+        if new_addr and idx is not None and idx < len(self.addresses):
+            self.addresses[idx] = new_addr
+            self.edit_dialog.dismiss()
+            self.get_sorted_addresses_cached.cache_clear()
+            self._update_specific_cards([idx])
+            self.save_address_list()
+            toast("Address updated")
+        else:
+            toast("Address cannot be empty")
 
     def show_completion_dialog(self, index):
         """Show streamlined completion dialog"""
@@ -1322,9 +1365,39 @@ class UltraFastAddressScreen(MDScreen):
         # Clear cache and update
         self.get_sorted_addresses_cached.cache_clear()
         self.save_completion_data()
+        self.save_address_list()
         self.update_ui_fast()
 
     # Data persistence
+    def save_address_list(self):
+        """Persist current addresses list"""
+        try:
+            path = self._get_addresses_path()
+            with open(path, 'w', encoding='utf-8') as f:
+                json.dump(self.addresses, f, ensure_ascii=False)
+        except Exception as e:
+            print(f"Address save error: {e}")
+
+    def load_address_list(self):
+        """Load persisted addresses list"""
+        try:
+            path = self._get_addresses_path()
+            if os.path.exists(path):
+                with open(path, 'r', encoding='utf-8') as f:
+                    self.addresses = json.load(f)
+        except Exception as e:
+            print(f"Address load error: {e}")
+            self.addresses = []
+
+    def _get_addresses_path(self):
+        if platform == 'android' and ANDROID_AVAILABLE:
+            try:
+                app_path = PythonActivity.mActivity.getFilesDir().getAbsolutePath()
+                return os.path.join(app_path, self.addresses_file)
+            except:
+                return self.addresses_file
+        return os.path.join(os.path.expanduser("~"), self.addresses_file)
+
     def save_completion_data(self):
         """Save completion data efficiently"""
         try:
