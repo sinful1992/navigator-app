@@ -911,7 +911,7 @@ class UltraFastAddressScreen(MDScreen):
         previous = self.active_address_index
         self.active_address_index = index
         self.get_sorted_addresses_cached.cache_clear()
-
+        # No layout reordering to preserve original CSV order
         indices = [index]
         if previous is not None:
             indices.append(previous)
@@ -940,7 +940,7 @@ class UltraFastAddressScreen(MDScreen):
                     self.navigate_to_address,
                     self._handle_action,
                     self.cancel_active_fast,
-                    self.show_edit_dialog
+                    self.show_edit_dialog,
                 )
 
     def cancel_active_fast(self):
