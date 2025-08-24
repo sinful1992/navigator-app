@@ -1,4 +1,4 @@
-##1.4
+##1.5
 from kivymd.app import MDApp
 from kivymd.uix.screen import MDScreen
 from kivymd.uix.screenmanager import MDScreenManager
@@ -1119,13 +1119,24 @@ class CompletedScreen(MDScreen):
         layout.add_widget(toolbar)
 
         # Controls row: Filters button + Search box
-        controls = MDBoxLayout(orientation='horizontal', padding=[dp(12), dp(8)], spacing=dp(8),
-                               size_hint_y=None, height=dp(52))
-        self.filter_btn = MDRaisedButton(text="Filters")
+        controls = MDBoxLayout(
+            orientation='horizontal',
+            padding=[dp(12), dp(8), dp(12), dp(8)],
+            spacing=dp(8),
+            size_hint_y=None,
+            height=dp(56),
+        )
+
+        self.filter_btn = MDRaisedButton(text="Filters", size_hint=(None, None), height=dp(40))
         self.filter_btn.bind(on_release=lambda x: self._open_filters_dialog())
         controls.add_widget(self.filter_btn)
 
-        self.search_field = MDTextField(hint_text="Search in address...", mode="rectangle")
+        self.search_field = MDTextField(
+            hint_text="Search in address...",
+            mode="rectangle",
+            size_hint=(1, None),
+            height=dp(40),
+        )
         self.search_field.bind(text=self._on_search_text)
         controls.add_widget(self.search_field)
 
@@ -1157,10 +1168,10 @@ class CompletedScreen(MDScreen):
             'week': 'This Week',
             'month': 'This Month',
             'all': 'All',
-            'custom': f"{self.date_from.strftime('%d/%m')}â€“{self.date_to.strftime('%d/%m')}"
+            'custom': f"{self.date_from.strftime('%d/%m')} to {self.date_to.strftime('%d/%m')}"
         }.get(self.quick_range, 'Today')
         outcome_txt = self.outcome_filter if self.outcome_filter else "All"
-        self.filter_summary_label.text = f"Range: {range_txt} â€¢ Outcome: {outcome_txt}"
+        self.filter_summary_label.text = f"Range: {range_txt} | Outcome: {outcome_txt}"
 
     # --- Filters dialog ---
     def _open_filters_dialog(self):
