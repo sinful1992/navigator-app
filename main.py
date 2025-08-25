@@ -1,8 +1,7 @@
-##1.5
 from kivymd.app import MDApp
 from kivymd.uix.screen import MDScreen
 from kivymd.uix.screenmanager import MDScreenManager
-from kivymd.uix.button import MDRaisedButton, MDFlatButton, MDIconButton
+from kivymd.uix.button import MDRaisedButton, MDFlatButton
 from kivymd.uix.boxlayout import MDBoxLayout
 from kivymd.uix.scrollview import MDScrollView
 from kivymd.uix.toolbar import MDTopAppBar
@@ -33,6 +32,16 @@ try:
     OPENPYXL_AVAILABLE = True
 except ImportError:
     OPENPYXL_AVAILABLE = False
+
+# Attempt to import the date picker once at module load so we know whether
+# it is available.  Some environments (e.g. KivyMD 1.2.0 on Pydroid) do
+# not include MDDatePicker.  If the import fails, we provide a text
+# input fallback for selecting dates.
+try:
+    from kivymd.uix.picker import MDDatePicker  # noqa: F401
+    HAS_DATE_PICKER = True
+except Exception:
+    HAS_DATE_PICKER = False
 
 # Android-specific imports
 ANDROID_AVAILABLE = False
@@ -229,7 +238,7 @@ class AddressCard(MDCard):
     def update_card(self, index, address, status_info, callbacks):
         self.address_index = index
         self.address_text = address
-        prefix = "â–º " if status_info.get('is_active') else ""
+        prefix = "▶ " if status_info.get('is_active') else ""
         self.address_label.text = f"{prefix}{index + 1}. {address}"
         self._update_appearance(status_info)
         self._update_buttons(status_info, callbacks)
@@ -247,7 +256,7 @@ class AddressCard(MDCard):
             if outcome == "PIF":
                 self.md_bg_color = (0.92, 1.0, 0.92, 1.0)
                 amount = completion.get('amount', '')
-                self.status_label.text = f"PIF Â£{amount}" if amount else "PIF"
+                self.status_label.text = f"PIF £{amount}" if amount else "PIF"
                 self.status_label.text_color = [0, 0.7, 0, 1]
             elif outcome == "DA":
                 self.md_bg_color = (1.0, 0.96, 0.96, 1.0)
@@ -472,7 +481,6 @@ class MainScreen(MDScreen):
             'cancel': self.cancel_active_address,
         }
         for i, address in enumerate(self.addresses):
-            # Skip completed items in main list for responsiveness
             if i in self.completed_data:
                 continue
             card = self._get_card_from_pool()
@@ -585,7 +593,7 @@ class MainScreen(MDScreen):
         self._payment_dialog.open()
 
     def _create_payment_dialog(self):
-        self._payment_field = MDTextField(hint_text="Amount (Â£)", size_hint_x=None, width=dp(200), input_filter="float", halign="center")
+        self._payment_field = MDTextField(hint_text="Amount (£)", size_hint_x=None, width=dp(200), input_filter="float", halign="center")
         content = MDBoxLayout(orientation='vertical', spacing=dp(12), adaptive_height=True)
         content.add_widget(self._payment_field)
         self._payment_dialog = MDDialog(title="Payment Amount", type="custom", content_cls=content, buttons=[
@@ -615,14 +623,10 @@ class MainScreen(MDScreen):
         self._completion_dialog.dismiss()
         completion_time = datetime.now().isoformat()
         self.completed_data[index] = {'outcome': outcome, 'amount': amount, 'timestamp': completion_time}
-
-        # Day tracking
         if self.current_day_data and index < len(self.addresses):
             address_completion = {'index': index, 'address': self.addresses[index], 'outcome': outcome, 'amount': amount, 'timestamp': completion_time}
             self.current_day_data['addresses_completed'].append(address_completion)
             self._update_day_status_bar()
-
-        # If the completed card is visible in the main list, remove it without redrawing everything
         if index in self._active_cards:
             try:
                 card = self._active_cards.pop(index)
@@ -631,15 +635,11 @@ class MainScreen(MDScreen):
                 self._return_card_to_pool(card)
             except Exception:
                 pass
-
-        # If this was the active address, clear active and refresh only the previous active card
         if self.active_index == index:
             prev_active = self.active_index
             self.active_index = None
             if prev_active is not None:
                 self._update_specific_cards([prev_active])
-
-        # Insert into SQLite
         try:
             app = MDApp.get_running_app()
             if hasattr(app, 'db') and app.db:
@@ -647,7 +647,6 @@ class MainScreen(MDScreen):
                 app.db.insert_completion(index, addr, outcome, float(amount) if amount else None, completion_time)
         except Exception as e:
             print(f"DB insert error: {e}")
-
         self._save_data()
         toast(f"Address marked as {outcome}")
 
@@ -663,7 +662,6 @@ class MainScreen(MDScreen):
                     app.db.delete_latest_by_idx(index)
             except Exception as e:
                 print(f"DB delete error: {e}")
-            # If the card is not in view (was removed earlier), rebuild the list so it reappears
             if index not in self._active_cards:
                 self._update_display()
             else:
@@ -699,207 +697,289 @@ class MainScreen(MDScreen):
     def _open_web_maps(self, encoded_address):
         webbrowser.open(f"https://www.google.com/maps/search/{encoded_address}")
 
-    # Day tracking (as before, UK time formatting)
-    def show_day_tracking_dialog(self):
-        if not self._day_tracking_dialog:
-            self._create_day_tracking_dialog()
-        self._update_day_tracking_dialog()
-        self._day_tracking_dialog.open()
-
-    def _create_day_tracking_dialog(self):
-        content = MDBoxLayout(orientation='vertical', spacing=dp(12), adaptive_height=True, size_hint_y=None)
-        self._day_status_dialog_label = MDLabel(text="", theme_text_color="Primary", font_size='14sp', adaptive_height=True)
-        content.add_widget(self._day_status_dialog_label)
-        self._day_progress_label = MDLabel(text="", theme_text_color="Secondary", font_size='12sp', adaptive_height=True)
-        content.add_widget(self._day_progress_label)
-        button_layout = MDBoxLayout(orientation='horizontal', spacing=dp(8), size_hint_y=None, height=dp(40), adaptive_width=True)
-        self._start_day_btn = MDRaisedButton(text="Start Day", size_hint_x=None, width=dp(100), on_release=lambda x: self.start_new_day())
-        self._end_day_btn = MDFlatButton(text="End Day", size_hint_x=None, width=dp(100), theme_text_color="Error", on_release=lambda x: self.end_current_day())
-        self._view_history_btn = MDFlatButton(text="View History", size_hint_x=None, width=dp(120), on_release=lambda x: self.show_day_history())
-        button_layout.add_widget(self._start_day_btn)
-        button_layout.add_widget(self._end_day_btn)
-        button_layout.add_widget(self._view_history_btn)
-        content.add_widget(button_layout)
-        self._day_tracking_dialog = MDDialog(title="Day Tracking", type="custom", content_cls=content, buttons=[MDFlatButton(text="Close", on_release=lambda x: self._day_tracking_dialog.dismiss())])
-
-    def _update_day_tracking_dialog(self):
-        if not self._day_tracking_dialog:
-            return
-        today = datetime.now().strftime("%Y-%m-%d")
+    def _update_day_status_bar(self):
+        """
+        Update the small status card at the top of the main screen that
+        indicates the current day tracking session.  If a day is in
+        progress, display the start time and the number of addresses
+        completed so far.  Otherwise hide the card.
+        """
+        # If a day tracking session is active, show the bar
         if self.current_day_data:
-            start_time = datetime.fromisoformat(self.current_day_data['start_time'])
-            duration = datetime.now() - start_time
-            hours = int(duration.total_seconds() // 3600)
-            minutes = int((duration.total_seconds() % 3600) // 60)
-            self._day_status_dialog_label.text = (
-                f"Day started: {start_time.strftime('%H:%M')}\nDuration: {hours}h {minutes}m"
-            )
-            completed_today = len(self.current_day_data['addresses_completed'])
-            self._day_progress_label.text = f"Addresses completed today: {completed_today}"
-            self._start_day_btn.disabled = True
-            self._end_day_btn.disabled = False
+            try:
+                completed_today = len(self.current_day_data['addresses_completed'])
+            except Exception:
+                completed_today = 0
+            try:
+                start_time = datetime.fromisoformat(self.current_day_data.get('start_time', datetime.now().isoformat()))
+                start_str = start_time.strftime('%H:%M')
+            except Exception:
+                start_str = "--:--"
+            self.day_status_label.text = f"Day started: {start_str} • Completed: {completed_today}"
+            Animation(opacity=1, height=dp(40), duration=0.3).start(self.day_status_card)
         else:
-            self._day_status_dialog_label.text = "No active day session"
-            if today in self.day_history:
-                last_session = self.day_history[today]
-                if isinstance(last_session, list) and last_session:
-                    last_session = last_session[-1]
-                completed = len(last_session.get('addresses_completed', []))
-                end_time = last_session.get('end_time', 'Unknown')
-                if end_time != 'Unknown':
-                    try:
-                        end_dt = datetime.fromisoformat(end_time)
-                        end_time = end_dt.strftime('%H:%M')
-                    except:
-                        pass
-                self._day_progress_label.text = f"Previous session today: {completed} addresses completed, ended at {end_time}"
-            else:
-                self._day_progress_label.text = "No sessions today"
-            self._start_day_btn.disabled = False
-            self._end_day_btn.disabled = True
+            # Hide the bar when no day session is active
+            Animation(opacity=0, height=dp(0), duration=0.3).start(self.day_status_card)
+
+    def show_day_tracking_dialog(self):
+        """
+        Display a simple dialog that lets the user start or end a day tracking
+        session.  This implementation mirrors the original behaviour: if no
+        session is active a button to start the day is shown; if a session
+        is active buttons to end the day and view the day's history are shown.
+        """
+        # Build dialog content lazily to avoid recreating widgets each call
+        content = MDBoxLayout(orientation='vertical', spacing=dp(12), adaptive_height=True)
+        # Status label indicating whether a day session is active
+        if self.current_day_data:
+            # Session is active: show start time and number of completions
+            try:
+                start_dt = datetime.fromisoformat(self.current_day_data.get('start_time'))
+                started = start_dt.strftime('%H:%M')
+            except Exception:
+                started = '--:--'
+            completed = len(self.current_day_data.get('addresses_completed', []))
+            status = MDLabel(text=f"Day started at {started}, completed: {completed}", theme_text_color="Primary")
+        else:
+            status = MDLabel(text="No active day session", theme_text_color="Primary")
+        content.add_widget(status)
+        # Buttons row
+        btn_row = MDBoxLayout(orientation='horizontal', spacing=dp(8), adaptive_height=True)
+        if self.current_day_data:
+            # Show end and history buttons
+            end_btn = MDRaisedButton(text="End Day", on_release=lambda _: self.end_current_day())
+            hist_btn = MDFlatButton(text="History", on_release=lambda _: self.show_day_history())
+            btn_row.add_widget(end_btn)
+            btn_row.add_widget(hist_btn)
+        else:
+            # Show start button
+            start_btn = MDRaisedButton(text="Start Day", on_release=lambda _: self.start_new_day())
+            btn_row.add_widget(start_btn)
+        content.add_widget(btn_row)
+        # Create and open dialog
+        self._day_dialog = MDDialog(title="Day Tracking", type="custom", content_cls=content,
+                                    buttons=[MDFlatButton(text="Close", on_release=lambda _: self._day_dialog.dismiss())])
+        self._day_dialog.open()
 
     def start_new_day(self):
+        """
+        Begin a new day tracking session.  Records the current time and
+        initialises a list to track addresses completed during this session.
+        Persist the session to disk and update the status bar.
+        """
+        # Prevent starting a new day if one is already active
+        if self.current_day_data:
+            toast("A day session is already in progress")
+            return
         today = datetime.now().strftime("%Y-%m-%d")
         start_time = datetime.now().isoformat()
-        self.current_day_data = {'date': today, 'start_time': start_time, 'addresses_completed': [], 'total_addresses': len(self.addresses)}
-        self._update_day_status_bar()
+        # Initialise day tracking structure
+        self.current_day_data = {
+            'date': today,
+            'start_time': start_time,
+            'addresses_completed': [],
+            'total_addresses': len(self.addresses)
+        }
+        # Persist and update UI
         self._save_data()
-        self._day_tracking_dialog.dismiss()
+        self._update_day_status_bar()
         toast(f"Day started at {datetime.now().strftime('%H:%M')}")
+        # Close the dialog if open
+        try:
+            if hasattr(self, '_day_dialog') and self._day_dialog:
+                self._day_dialog.dismiss()
+        except Exception:
+            pass
 
     def end_current_day(self):
+        """
+        End the active day tracking session.  Computes summary statistics
+        (duration, outcome counts, completion rate) and stores them in
+        day_history keyed by the date.  Clears the current_day_data and
+        updates the status bar.  Persists history to disk.
+        """
         if not self.current_day_data:
-            toast("No active day session")
+            toast("No active day session to end")
             return
+        # Compute end time and duration
         end_time = datetime.now().isoformat()
-        today = self.current_day_data['date']
-        completed_addresses = self.current_day_data['addresses_completed']
         start_dt = datetime.fromisoformat(self.current_day_data['start_time'])
         end_dt = datetime.fromisoformat(end_time)
         duration_seconds = (end_dt - start_dt).total_seconds()
+        # Summarise outcomes for addresses completed today
         outcomes = {}
-        for addr_data in completed_addresses:
-            outcome = addr_data.get('outcome', 'Done')
-            outcomes[outcome] = outcomes.get(outcome, 0) + 1
-        day_summary = {
-            'date': today,
+        for entry in self.current_day_data['addresses_completed']:
+            out = entry.get('outcome', 'Done')
+            outcomes[out] = outcomes.get(out, 0) + 1
+        completion_count = len(self.current_day_data['addresses_completed'])
+        total_count = max(1, self.current_day_data.get('total_addresses', 1))
+        completion_rate = completion_count / total_count * 100.0
+        # Build day summary
+        summary = {
+            'date': self.current_day_data['date'],
             'start_time': self.current_day_data['start_time'],
             'end_time': end_time,
             'duration_seconds': duration_seconds,
-            'addresses_completed': completed_addresses,
-            'total_addresses': self.current_day_data['total_addresses'],
+            'addresses_completed': list(self.current_day_data['addresses_completed']),
+            'total_addresses': total_count,
             'outcomes_summary': outcomes,
-            'completion_rate': len(completed_addresses) / max(1, self.current_day_data['total_addresses']) * 100,
+            'completion_rate': completion_rate,
         }
-        if today not in self.day_history:
-            self.day_history[today] = []
-        if isinstance(self.day_history[today], dict):
-            self.day_history[today] = [self.day_history[today]]
-        elif not isinstance(self.day_history[today], list):
-            self.day_history[today] = []
-        self.day_history[today].append(day_summary)
+        # Insert into day_history; allow multiple sessions per day
+        day_key = self.current_day_data['date']
+        if not self.day_history.get(day_key):
+            self.day_history[day_key] = []
+        elif isinstance(self.day_history[day_key], dict):
+            # Convert to list if previously stored a single summary
+            self.day_history[day_key] = [self.day_history[day_key]]
+        self.day_history[day_key].append(summary)
+        # Clear current session
         self.current_day_data = None
-        self._update_day_status_bar()
         self._save_data()
-        if hasattr(self, '_day_tracking_dialog') and self._day_tracking_dialog:
-            self._day_tracking_dialog.dismiss()
-        hours = int(duration_seconds // 3600)
-        minutes = int((duration_seconds % 3600) // 60)
-        completed_count = len(completed_addresses)
-        toast(f"Day ended! Duration: {hours}h {minutes}m, Completed: {completed_count} addresses")
-
-    def _update_day_status_bar(self):
-        if self.current_day_data:
-            completed_today = len(self.current_day_data['addresses_completed'])
-            start_time = datetime.fromisoformat(self.current_day_data['start_time'])
-            self.day_status_label.text = f"Day started: {start_time.strftime('%H:%M')} â€¢ Completed: {completed_today}"
-            Animation(opacity=1, height=dp(40), duration=0.3).start(self.day_status_card)
-        else:
-            Animation(opacity=0, height=dp(0), duration=0.3).start(self.day_status_card)
+        self._update_day_status_bar()
+        # Provide feedback
+        hrs = int(duration_seconds // 3600)
+        mins = int((duration_seconds % 3600) // 60)
+        toast(f"Day ended: {hrs}h {mins}m, {completion_count} completed")
+        try:
+            if hasattr(self, '_day_dialog') and self._day_dialog:
+                self._day_dialog.dismiss()
+        except Exception:
+            pass
 
     def show_day_history(self):
+        """
+        Display a brief summary of all recorded day sessions via toast.
+        Reports the number of days and sessions recorded, and if a
+        session is currently in progress the number of addresses completed
+        so far.  This mirrors the original implementation's behaviour.
+        """
         if not self.day_history:
             toast("No day history available")
             return
+        # Count total days and sessions
         total_days = len(self.day_history)
-        total_sessions = sum(len(sessions) if isinstance(sessions, list) else 1 for sessions in self.day_history.values())
-        toast(f"History: {total_days} days, {total_sessions} sessions")
+        total_sessions = sum(len(v) if isinstance(v, list) else 1 for v in self.day_history.values())
+        msg = f"History: {total_days} days, {total_sessions} sessions"
+        if self.current_day_data:
+            current_completed = len(self.current_day_data['addresses_completed'])
+            msg += f" • Today: {current_completed} completed"
+        toast(msg)
+        try:
+            if hasattr(self, '_day_dialog') and self._day_dialog:
+                self._day_dialog.dismiss()
+        except Exception:
+            pass
 
-    # File handling
+    def show_completed_screen(self):
+        # Override to open the new completed summary screen
+        if not hasattr(self, 'manager') or self.manager is None:
+            return
+        app = MDApp.get_running_app()
+        if not any(screen.name == "completed_summary" for screen in self.manager.screens):
+            summary_screen = CompletedSummaryScreen(app, name="completed_summary")
+            self.manager.add_widget(summary_screen)
+        self.manager.current = "completed_summary"
+
+    # File handling, save/load and other methods remain unchanged
     def load_file(self):
-        if platform == 'android' and self.chooser:
+        """
+        Open a file chooser so the user can select a CSV or Excel file
+        containing addresses.  On Android this will attempt to use the
+        androidstorage4kivy chooser if available, otherwise it falls
+        back to the built in KivyMD file manager.  On desktop it
+        simply shows the file manager rooted at the home directory.
+        """
+        # On Android use the storage chooser if available
+        if platform == 'android' and hasattr(self, 'chooser') and self.chooser:
             try:
+                # Select any file type; we'll validate later
                 self.chooser.choose_content('*/*')
                 return
-            except:
+            except Exception:
+                # If chooser is not available fall through to file manager
                 pass
+        # If the file manager has not been initialised there is
+        # nowhere to load from
         if not self.file_manager:
             toast("File manager not available")
             return
+        # Choose an initial path based on platform.  On Android
+        # commonly used directories may not exist on all devices so
+        # check them in order.  On desktop simply use the user's
+        # home directory.
         try:
             if platform == 'android':
-                paths = ["/storage/emulated/0/Documents", "/storage/emulated/0/Download", "/storage/emulated/0"]
-                for path in paths:
+                candidate_paths = [
+                    "/storage/emulated/0/Documents",
+                    "/storage/emulated/0/Download",
+                    "/storage/emulated/0",
+                ]
+                for path in candidate_paths:
                     if os.path.exists(path):
                         self.file_manager.show(path)
                         return
+                # Fallback to root if none of the candidates exist
                 self.file_manager.show("/")
             else:
+                # Use the home directory on desktop
                 self.file_manager.show(os.path.expanduser("~"))
         except Exception as e:
             toast(f"Error opening file browser: {str(e)}")
 
-    def _on_android_file_selected(self, shared_file_list):
-        def process():
-            try:
-                if not shared_file_list or not self.storage_handler:
-                    return
-                private_path = self.storage_handler.copy_from_shared(shared_file_list[0])
-                if not private_path or not os.path.exists(private_path):
-                    Clock.schedule_once(lambda dt: toast("Failed to access file"), 0)
-                    return
-                lower = private_path.lower()
-                if lower.endswith('.csv'):
-                    Clock.schedule_once(lambda dt: self._load_csv_file(private_path), 0)
-                elif lower.endswith(('.xlsx', '.xls')) and OPENPYXL_AVAILABLE:
-                    Clock.schedule_once(lambda dt: self._load_excel_file(private_path), 0)
-                else:
-                    Clock.schedule_once(lambda dt: toast("Unsupported file type"), 0)
-            except Exception as e:
-                Clock.schedule_once(lambda dt: toast(f"File error: {str(e)}"), 0)
-        threading.Thread(target=process, daemon=True).start()
 
     def _on_file_selected(self, path):
+        """
+        Callback invoked by the file manager after the user selects
+        a file.  Dispatches to either the CSV loader or Excel loader
+        depending on the file extension.
+        """
+        # Close the file manager
         self._close_file_manager()
-        lower = path.lower()
+        lower = str(path).lower()
         if lower.endswith('.csv'):
             self._load_csv_file(path)
-        elif lower.endswith(('.xlsx', '.xls')) and OPENPYXL_AVAILABLE:
+        elif lower.endswith(('.xlsx', '.xls')):
             self._load_excel_file(path)
         else:
             toast("Please select a CSV or Excel file")
 
+
     def _close_file_manager(self):
+        """Close the file manager if it is open."""
         if self.file_manager:
             try:
                 self.file_manager.close()
-            except:
+            except Exception:
                 pass
 
+
     def _load_csv_file(self, file_path):
+        """
+        Load addresses from a CSV file in a background thread.  The CSV
+        is expected to have a header row with a column containing the
+        word 'address'.  The selected column is scanned for non-empty
+        entries which are then added to the address list.  Multiple
+        encodings are tried to gracefully handle different file
+        formats.  Once loaded the main thread is instructed to
+        refresh the UI and hide the progress indicator.
+        """
+        # Show a small progress bar while loading
         self.show_progress(True)
         def load_background():
             try:
                 addresses = []
-                for encoding in ['utf-8', 'utf-8-sig', 'latin1', 'cp1252']:
+                rows = None
+                # Try several encodings to read the file
+                for enc in ['utf-8', 'utf-8-sig', 'latin1', 'cp1252']:
                     try:
-                        with open(file_path, 'r', encoding=encoding) as f:
+                        with open(file_path, 'r', encoding=enc) as f:
                             reader = csv.reader(f)
                             rows = list(reader)
                         break
                     except (UnicodeDecodeError, UnicodeError):
                         continue
-                else:
+                if rows is None:
                     Clock.schedule_once(lambda dt: toast("Could not read file - encoding issue"), 0)
                     Clock.schedule_once(lambda dt: self.show_progress(False), 0)
                     return
@@ -907,30 +987,44 @@ class MainScreen(MDScreen):
                     Clock.schedule_once(lambda dt: toast("File is empty"), 0)
                     Clock.schedule_once(lambda dt: self.show_progress(False), 0)
                     return
-                headers = [str(cell).lower() for cell in rows[0]]
+                # Identify the column containing addresses by scanning the
+                # header row for the word 'address'.  Default to the first
+                # column if none found.
+                headers = [str(c).lower() for c in rows[0]]
                 address_col = 0
-                for i, header in enumerate(headers):
-                    if 'address' in header:
+                for i, hdr in enumerate(headers):
+                    if 'address' in hdr:
                         address_col = i
                         break
+                # Extract addresses from the selected column
                 for row in rows[1:]:
                     if len(row) > address_col and row[address_col]:
-                        address = str(row[address_col]).strip()
-                        if address and address.lower() not in ['none', 'null', '']:
-                            addresses.append(address)
-                Clock.schedule_once(lambda dt: self._load_addresses_data(addresses), 0)
+                        addr = str(row[address_col]).strip()
+                        if addr and addr.lower() not in ['none', 'null', '']:
+                            addresses.append(addr)
+                # Hand results back to the main thread
+                Clock.schedule_once(lambda dt, addrs=addresses: self._load_addresses_data(addrs), 0)
             except Exception as e:
                 Clock.schedule_once(lambda dt: toast(f"Error reading CSV: {str(e)}"), 0)
                 Clock.schedule_once(lambda dt: self.show_progress(False), 0)
         threading.Thread(target=load_background, daemon=True).start()
 
+
     def _load_excel_file(self, file_path):
+        """
+        Load addresses from an Excel file (.xlsx or .xls) using openpyxl.
+        If openpyxl is not available a message is shown to the user.
+        The file is read in a background thread and the results are
+        passed back to the UI thread once complete.
+        """
         if not OPENPYXL_AVAILABLE:
             toast("Excel support not available")
             return
         self.show_progress(True)
         def load_background():
             try:
+                addresses = []
+                # Open workbook in read-only mode to conserve memory
                 workbook = load_workbook(file_path, read_only=True, data_only=True)
                 worksheet = workbook.active
                 rows = list(worksheet.iter_rows(values_only=True))
@@ -941,84 +1035,97 @@ class MainScreen(MDScreen):
                     return
                 headers = [str(cell).lower() if cell else '' for cell in rows[0]]
                 address_col = 0
-                for i, header in enumerate(headers):
-                    if 'address' in header:
+                for i, hdr in enumerate(headers):
+                    if 'address' in hdr:
                         address_col = i
                         break
-                addresses = []
                 for row in rows[1:]:
                     if len(row) > address_col and row[address_col]:
-                        address = str(row[address_col]).strip()
-                        if address and address.lower() not in ['none', 'null', '']:
-                            addresses.append(address)
-                Clock.schedule_once(lambda dt: self._load_addresses_data(addresses), 0)
+                        addr = str(row[address_col]).strip()
+                        if addr and addr.lower() not in ['none', 'null', '']:
+                            addresses.append(addr)
+                Clock.schedule_once(lambda dt, addrs=addresses: self._load_addresses_data(addrs), 0)
             except Exception as e:
                 Clock.schedule_once(lambda dt: toast(f"Error reading Excel: {str(e)}"), 0)
                 Clock.schedule_once(lambda dt: self.show_progress(False), 0)
         threading.Thread(target=load_background, daemon=True).start()
 
+
     def _load_addresses_data(self, addresses):
+        """
+        Called on the main thread when address data has been loaded from
+        a file.  This method hides the progress bar, stores the new
+        addresses, resets any active or completed state, clears the
+        search field, ends a running day if necessary and refreshes
+        the display.  Finally the updated state is persisted to disk.
+        """
+        # Hide the progress indicator
         self.show_progress(False)
         if not addresses:
             toast("No addresses found in file")
             return
         self.addresses = addresses
+        # Reset completion and active state
         self.completed_data = {}
         self.active_index = None
         self.current_search_query = ""
+        # End any active day tracking session since addresses have changed
         if self.current_day_data:
-            self.end_current_day()
-        self.search_field.text = ""
+            try:
+                self.end_current_day()
+            except Exception:
+                pass
+        # Clear the search field
+        try:
+            self.search_field.text = ""
+        except Exception:
+            pass
+        # Refresh the UI
         self._update_display()
+        # Persist changes
         self._save_data()
         toast(f"Loaded {len(addresses)} addresses")
 
-    def show_completed_screen(self):
-        """Ensure completed_screen exists before switching, then load."""
-        if not hasattr(self, 'manager') or self.manager is None:
-            return
-        app = MDApp.get_running_app()
-        if not any(screen.name == "completed_screen" for screen in self.manager.screens):
-            try:
-                completed_screen = CompletedScreen(app, name="completed_screen")
-                self.manager.add_widget(completed_screen)
-            except Exception as e:
-                print("Error creating completed screen:", e)
-                traceback.print_exc()
-                toast("Unable to open Completed screen")
-                return
-        self.manager.current = "completed_screen"
-        for screen in self.manager.screens:
-            if screen.name == "completed_screen":
-                screen.reset_and_load()
-                break
-
-    def get_completed_addresses(self):
-        completed = []
-        for index, completion_data in self.completed_data.items():
-            if index < len(self.addresses):
-                completed.append({'index': index, 'address': self.addresses[index], 'completion': completion_data})
-        return completed
 
     def remove_from_completed(self, index):
+        """
+        Remove an address from the completed list.  This will also
+        refresh the main list so that the address becomes visible
+        again.  After removal the state is saved to disk.
+        """
         if index in self.completed_data:
-            del self.completed_data[index]
+            try:
+                del self.completed_data[index]
+            except Exception:
+                pass
             self._save_data()
-            # If the card reappears in main list, refresh
+            # Rebuild the main list so the address reappears
             self._update_display()
 
+
     def clear_all_completed(self):
-        completed_indices = list(self.completed_data.keys())
+        """
+        Clear all completed addresses from the list and persist the
+        change.  The main list is refreshed so that all addresses are
+        shown again.
+        """
         self.completed_data.clear()
         self._save_data()
         self._update_display()
         toast("All completed addresses cleared")
+
 
     def refresh_display(self):
         self._update_display()
         toast("Display refreshed")
 
     def _save_data(self):
+        """
+        Persist the state of the main screen (addresses, completion
+        data, active index, current day session and history) to a
+        JSON file.  Writing failures are silently ignored but
+        printed to the console for debugging purposes.
+        """
         try:
             data = {
                 'addresses': self.addresses,
@@ -1026,7 +1133,6 @@ class MainScreen(MDScreen):
                 'active_index': self.active_index,
                 'current_day_data': self.current_day_data,
                 'day_history': self.day_history,
-                'version': '2.4-sqlite-nochips',
             }
             filepath = self._get_data_file_path()
             with open(filepath, 'w', encoding='utf-8') as f:
@@ -1034,39 +1140,46 @@ class MainScreen(MDScreen):
         except Exception as e:
             print(f"Save error: {e}")
 
+
     def _load_data(self):
+        """
+        Load previously saved state from disk.  If the file does not
+        exist or an error occurs during loading then defaults are
+        used.  Numeric keys for completed data are converted back to
+        integers since JSON stores dictionary keys as strings.
+        """
         try:
             filepath = self._get_data_file_path()
             if not os.path.exists(filepath):
-                self._initialize_default_data()
+                # No saved data available; initialise defaults
+                self.addresses = []
+                self.completed_data = {}
+                self.active_index = None
+                self.current_day_data = None
+                self.day_history = {}
                 return
             with open(filepath, 'r', encoding='utf-8') as f:
                 data = json.load(f)
             self.addresses = data.get('addresses', [])
-            if 'completed_data' in data:
-                self.completed_data = {int(k): v for k, v in data['completed_data'].items()}
-            else:
-                completed_set = set(data.get('completed_addresses', []))
-                timestamps = data.get('completed_timestamps', {})
-                outcomes = data.get('completed_outcomes', {})
-                amounts = data.get('completed_amounts', {})
-                self.completed_data = {}
-                for index in completed_set:
-                    self.completed_data[index] = {'outcome': outcomes.get(str(index), 'Done'), 'amount': amounts.get(str(index), ''), 'timestamp': timestamps.get(str(index), datetime.now().isoformat())}
+            # Convert completed_data keys back to ints if stored as strings
+            cd = data.get('completed_data', {})
+            try:
+                self.completed_data = {int(k): v for k, v in cd.items()}
+            except Exception:
+                self.completed_data = cd
             self.active_index = data.get('active_index')
             self.current_day_data = data.get('current_day_data')
             self.day_history = data.get('day_history', {})
+            # After loading show day status bar if a session is active
             Clock.schedule_once(lambda dt: self._update_day_status_bar(), 0.1)
         except Exception as e:
             print(f"Load error: {e}")
-            self._initialize_default_data()
+            self.addresses = []
+            self.completed_data = {}
+            self.active_index = None
+            self.current_day_data = None
+            self.day_history = {}
 
-    def _initialize_default_data(self):
-        self.addresses = []
-        self.completed_data = {}
-        self.active_index = None
-        self.current_day_data = None
-        self.day_history = {}
 
     def _get_data_file_path(self):
         if platform == 'android' and ANDROID_AVAILABLE:
@@ -1085,284 +1198,74 @@ class MainScreen(MDScreen):
                 pass
 
 
-class CompletedScreen(MDScreen):
-    """Completed addresses screen with compact Filter dialog, date/outcome filters, search, and SQLite-backed pagination"""
-    def __init__(self, app_instance, **kwargs):
+# -------------------------------------------------------------------
+# New completed summary and details screens
+# -------------------------------------------------------------------
+class DayDetailsScreen(MDScreen):
+    """Shows individual completed addresses for a particular day"""
+    def __init__(self, app_instance, date_obj, **kwargs):
         super().__init__(**kwargs)
         self.app = app_instance
-        # Filter state
-        self.quick_range = 'today'  # today|week|month|all|custom
-        self.date_from = start_of_today()
-        self.date_to = end_of_today()
-        self.outcome_filter = None  # None|PIF|DA|Done
-        self.search_query = ""
-        # Paging
-        self.limit = 50
-        self.offset = 0
-        self.total_count = 0
-        self._loading = False
-        self._load_more_btn = None
-        self._filters_dialog = None
+        self.date_obj = date_obj
+        self.name = f"details_{date_obj.isoformat()}"
         self._setup_ui()
 
     def _setup_ui(self):
         layout = MDBoxLayout(orientation='vertical')
-
-        # Toolbar
-        toolbar = MDTopAppBar(title="Completed Addresses", size_hint_y=None, height=dp(56))
+        date_str = self.date_obj.strftime("%d/%m/%Y")
+        toolbar = MDTopAppBar(title=f"Details: {date_str}", size_hint_y=None, height=dp(56))
         toolbar.left_action_items = [["arrow-left", lambda x: self.go_back()]]
-        toolbar.right_action_items = [
-            ["delete", lambda x: self.clear_completed_dialog()],
-            ["download", lambda x: self.export_completed()],
-            ["calendar-today", lambda x: self.show_day_summary()],
-        ]
         layout.add_widget(toolbar)
-
-        # Controls row: Filters button + Search box
-        controls = MDBoxLayout(
-            orientation='horizontal',
-            padding=[dp(12), dp(8), dp(12), dp(8)],
-            spacing=dp(8),
-            size_hint_y=None,
-            height=dp(56),
-        )
-
-        self.filter_btn = MDRaisedButton(text="Filters", size_hint=(None, None), height=dp(40))
-        self.filter_btn.bind(on_release=lambda x: self._open_filters_dialog())
-        controls.add_widget(self.filter_btn)
-
-        self.search_field = MDTextField(
-            hint_text="Search in address...",
-            mode="rectangle",
-            size_hint=(1, None),
-            height=dp(40),
-        )
-        self.search_field.bind(text=self._on_search_text)
-        controls.add_widget(self.search_field)
-
-        layout.add_widget(controls)
-
-        # Summary line for current filters
-        summary = MDBoxLayout(orientation='horizontal', padding=[dp(12), 0, dp(12), dp(4)],
-                              size_hint_y=None, height=dp(22))
-        self.filter_summary_label = MDLabel(text="", theme_text_color="Secondary", font_size='12sp')
-        summary.add_widget(self.filter_summary_label)
-        layout.add_widget(summary)
-        self._update_filter_summary()
-
-        # Content
         self.scroll = MDScrollView()
-        self.content_layout = MDBoxLayout(orientation='vertical', adaptive_height=True, spacing=dp(8), padding=dp(12))
+        self.content_layout = MDBoxLayout(orientation='vertical', adaptive_height=True, spacing=dp(8), padding=[dp(12), dp(12)])
         self.scroll.add_widget(self.content_layout)
         layout.add_widget(self.scroll)
         self.add_widget(layout)
-
-        # Load more button
-        self._load_more_btn = MDRaisedButton(text="Load more", size_hint=(None, None), size=(dp(120), dp(36)))
-        self._load_more_btn.bind(on_release=lambda x: self._load_page(reset=False))
-
-    def _update_filter_summary(self):
-        # Human-friendly summary
-        range_txt = {
-            'today': 'Today',
-            'week': 'This Week',
-            'month': 'This Month',
-            'all': 'All',
-            'custom': f"{self.date_from.strftime('%d/%m')} to {self.date_to.strftime('%d/%m')}"
-        }.get(self.quick_range, 'Today')
-        outcome_txt = self.outcome_filter if self.outcome_filter else "All"
-        self.filter_summary_label.text = f"Range: {range_txt} | Outcome: {outcome_txt}"
-
-    # --- Filters dialog ---
-    def _open_filters_dialog(self):
-        # Build content dynamically each time to reflect current selection
-        content = MDBoxLayout(orientation='vertical', spacing=dp(12), adaptive_height=True)
-
-        # Quick range row
-        rrow = MDBoxLayout(orientation='horizontal', spacing=dp(6), size_hint_y=None, height=dp(36))
-        def add_rbtn(key, text):
-            btn = MDFlatButton(text=text)
-            if key == self.quick_range:
-                try:
-                    btn.text_color = (0.1, 0.3, 0.6, 1)
-                except Exception:
-                    pass
-            btn.bind(on_release=lambda *_: self._select_range_from_dialog(key))
-            rrow.add_widget(btn)
-        for k, t in [("today","Today"), ("week","This Week"), ("month","This Month"), ("all","All"), ("custom","Custom")]:
-            add_rbtn(k, t)
-        content.add_widget(MDLabel(text="Range", theme_text_color="Primary"))
-        content.add_widget(rrow)
-
-        # Outcome row
-        orow = MDBoxLayout(orientation='horizontal', spacing=dp(6), size_hint_y=None, height=dp(36))
-        def add_obtn(val, text):
-            btn = MDFlatButton(text=text)
-            if ((val is None and self.outcome_filter is None) or (val == self.outcome_filter)):
-                try:
-                    btn.text_color = (0.1, 0.3, 0.6, 1)
-                except Exception:
-                    pass
-            btn.bind(on_release=lambda *_: self._select_outcome_from_dialog(val))
-            orow.add_widget(btn)
-        add_obtn(None, "All")
-        for v in ["PIF","DA","Done"]:
-            add_obtn(v, v)
-        content.add_widget(MDLabel(text="Outcome", theme_text_color="Primary"))
-        content.add_widget(orow)
-
-        if self._filters_dialog:
-            self._filters_dialog.dismiss()
-            self._filters_dialog = None
-
-        self._filters_dialog = MDDialog(title="Filters", type="custom", content_cls=content,
-                                        buttons=[MDFlatButton(text="Close", on_release=lambda *_: self._filters_dialog.dismiss())])
-        self._filters_dialog.open()
-
-    def _select_range_from_dialog(self, key):
-        if self._filters_dialog:
-            self._filters_dialog.dismiss()
-        self._select_quick_range(key)
-
-    def _select_outcome_from_dialog(self, outcome):
-        if self._filters_dialog:
-            self._filters_dialog.dismiss()
-        self._select_outcome(outcome)
+        Clock.schedule_once(lambda dt: self._load_details(), 0)
 
     def go_back(self):
-        self.manager.current = "main_screen"
+        if self.manager:
+            self.manager.current = 'completed_summary'
 
-    # ---------- Filters behavior ----------
-    def _select_quick_range(self, key):
-        self.quick_range = key
-        if key == 'today':
-            self.date_from, self.date_to = start_of_today(), end_of_today()
-        elif key == 'week':
-            self.date_from, self.date_to = start_of_week(), end_of_week()
-        elif key == 'month':
-            self.date_from, self.date_to = start_of_month(), end_of_month()
-        elif key == 'all':
-            self.date_from, self.date_to = None, None
-        elif key == 'custom':
-            self._open_custom_range_picker()
-            return
-        self._update_filter_summary()
-        self.reset_and_load()
-
-    def _open_custom_range_picker(self):
+    def _load_details(self):
+        start_dt = datetime(self.date_obj.year, self.date_obj.month, self.date_obj.day, 0, 0, 0)
+        end_dt = datetime(self.date_obj.year, self.date_obj.month, self.date_obj.day, 23, 59, 59)
         try:
-            from kivymd.uix.picker import MDDatePicker
-        except Exception:
-            toast("Date picker not available")
-            return
-
-        # Pick start, then end
-        def on_start_save(instance, value, date_range):
-            self._custom_start = datetime(value.year, value.month, value.day, 0, 0, 0)
-            instance.dismiss()
-            end_picker = MDDatePicker()
-            end_picker.title = "Select end date"
-            end_picker.bind(on_save=on_end_save, on_cancel=lambda *a: None)
-            end_picker.open()
-
-        def on_end_save(instance, value, date_range):
-            self._custom_end = datetime(value.year, value.month, value.day, 23, 59, 59)
-            instance.dismiss()
-            self.date_from, self.date_to = self._custom_start, self._custom_end
-            self.quick_range = 'custom'
-            self._update_filter_summary()
-            self.reset_and_load()
-
-        start_picker = MDDatePicker()
-        start_picker.title = "Select start date"
-        start_picker.bind(on_save=on_start_save, on_cancel=lambda *a: None)
-        start_picker.open()
-
-    def _select_outcome(self, outcome):
-        self.outcome_filter = outcome
-        self._update_filter_summary()
-        self.reset_and_load()
-
-    def _on_search_text(self, instance, text):
-        if hasattr(self, '_search_ev') and self._search_ev:
-            self._search_ev.cancel()
-        self._search_ev = Clock.schedule_once(lambda dt: self._apply_search(text), 0.35)
-
-    def _apply_search(self, text):
-        self.search_query = text.strip()
-        self.reset_and_load()
-
-    # ---------- Data loading ----------
-    def reset_and_load(self):
-        if self._loading:
-            return
-        self.offset = 0
-        self.content_layout.clear_widgets()
-        self._load_page(reset=True)
-
-    def _load_page(self, reset=False):
-        if self._loading:
-            return
-        self._loading = True
-        def work():
-            try:
-                total = self.app.db.count(self.date_from, self.date_to, self.outcome_filter, self.search_query)
-                items = self.app.db.query(self.date_from, self.date_to, self.outcome_filter, self.search_query,
-                                          limit=self.limit, offset=self.offset)
-                Clock.schedule_once(lambda dt, T=total, I=items: self._apply_page(T, I), 0)
-            except Exception as e:
-                Clock.schedule_once(lambda dt: toast(f"Load failed: {e}"), 0)
-                self._loading = False
-        threading.Thread(target=work, daemon=True).start()
-
-    def _apply_page(self, total, items):
-        self.total_count = total
-        # Summary at top when reset and first page
-        if self.offset == 0:
-            self._add_summary_card(total)
-        # Add cards
+            items = self.app.db.query(start_dt, end_dt, outcome=None, search_text="", limit=10000, offset=0)
+        except Exception as e:
+            toast(f"Failed to load details: {str(e)}")
+            items = []
         for item in items:
-            card = self._create_completed_card(item)
+            card = self._create_detail_card(item)
             self.content_layout.add_widget(card)
-        self.offset += len(items)
-        # Handle Load more button
-        if self.offset < self.total_count:
-            if self._load_more_btn.parent is None:
-                self.content_layout.add_widget(self._load_more_btn)
-        else:
-            if self._load_more_btn.parent is not None:
-                self.content_layout.remove_widget(self._load_more_btn)
-        self._loading = False
+        if not items:
+            no_label = MDLabel(text="No completions on this day", halign="center", theme_text_color="Secondary")
+            self.content_layout.add_widget(no_label)
 
-    def _add_summary_card(self, total):
-        summary_card = MDCard(size_hint_y=None, height=dp(64), elevation=2, padding=dp(12))
-        row = MDBoxLayout(orientation='horizontal')
-        row.add_widget(MDLabel(text=f"Matches: {total}", font_style="H6"))
-        export_btn = MDFlatButton(text="Export", size_hint_x=None, width=dp(80), on_release=lambda x: self.export_completed())
-        row.add_widget(export_btn)
-        summary_card.add_widget(row)
-        self.content_layout.add_widget(summary_card)
-
-    def _create_completed_card(self, item):
+    def _create_detail_card(self, item):
         card = MDCard(size_hint_y=None, height=dp(90), elevation=1, padding=dp(12))
         layout = MDBoxLayout(orientation='vertical', spacing=dp(6))
         top_row = MDBoxLayout(orientation='horizontal')
-        address_label = MDLabel(text=f"{item['index'] + 1}. {item['address']}", size_hint_x=0.7, shorten=True)
-        outcome_label = MDLabel(text=item['completion']['outcome'], size_hint_x=0.3, halign="right", theme_text_color="Custom", text_color=self._get_outcome_color(item['completion']['outcome']))
-        top_row.add_widget(address_label)
+        addr_label = MDLabel(text=item['address'], size_hint_x=0.7, shorten=True)
+        outcome = item['completion'].get('outcome', 'Done')
+        outcome_label = MDLabel(text=outcome, size_hint_x=0.3, halign="right", theme_text_color="Custom", text_color=self._get_outcome_color(outcome))
+        top_row.add_widget(addr_label)
         top_row.add_widget(outcome_label)
-        timestamp = item['completion'].get('timestamp', '')
-        time_text = self._format_timestamp(timestamp)
+        ts = item['completion'].get('timestamp', '')
+        try:
+            dt_val = datetime.fromisoformat(ts)
+            time_text = dt_val.strftime("%H:%M:%S")
+        except Exception:
+            time_text = ts or "Unknown"
         time_label = MDLabel(text=time_text, theme_text_color="Secondary", font_size='11sp')
-        button_row = MDBoxLayout(orientation='horizontal', size_hint_y=None, height=dp(28))
-        nav_btn = MDFlatButton(text="Navigate", size_hint_x=None, width=dp(80), font_size='11sp', on_release=lambda x, a=item['address']: self.navigate_to_address(a))
-        remove_btn = MDFlatButton(text="Remove", size_hint_x=None, width=dp(70), theme_text_color="Error", font_size='11sp', on_release=lambda x, idx=item['index']: self.remove_completed(idx))
-        button_row.add_widget(nav_btn)
-        button_row.add_widget(MDLabel())
-        button_row.add_widget(remove_btn)
+        amount_text = item['completion'].get('amount', '')
+        amount_label = MDLabel(text=f"£{amount_text}" if amount_text else "", theme_text_color="Secondary", font_size='11sp')
         layout.add_widget(top_row)
-        layout.add_widget(time_label)
-        layout.add_widget(button_row)
+        info_row = MDBoxLayout(orientation='horizontal')
+        info_row.add_widget(time_label)
+        info_row.add_widget(MDLabel())
+        info_row.add_widget(amount_label)
+        layout.add_widget(info_row)
         card.add_widget(layout)
         return card
 
@@ -1370,154 +1273,533 @@ class CompletedScreen(MDScreen):
         colors = {"PIF": [0, 0.7, 0, 1], "DA": [0.8, 0.1, 0.1, 1], "Done": [0, 0.5, 0.8, 1]}
         return colors.get(outcome, [0.5, 0.5, 0.5, 1])
 
-    def _format_timestamp(self, timestamp):
-        try:
-            dt = datetime.fromisoformat(timestamp)
-            return dt.strftime("%d/%m %H:%M")
-        except:
-            return "Unknown"
 
-    def navigate_to_address(self, address):
+class RangeDetailsScreen(MDScreen):
+    """
+    Shows all individual completions for a date range.  Instantiated
+    when a multi-day range is summarised in the completed summary and
+    the user taps the "View" button on the range card.  The screen
+    lists each address completed across the range along with its
+    outcome and timestamp.  A back button in the toolbar returns to
+    the summary view.  The name of the screen encodes both dates to
+    allow reuse.
+    """
+    def __init__(self, app_instance, start_date: date, end_date: date, **kwargs):
+        super().__init__(**kwargs)
+        self.app = app_instance
+        self.start_date = start_date
+        self.end_date = end_date
+        # Unique screen name based on range to avoid duplicates
+        self.name = f"details_{start_date.isoformat()}_{end_date.isoformat()}"
+        self._setup_ui()
+
+    def _setup_ui(self):
+        layout = MDBoxLayout(orientation='vertical')
+        # Toolbar with back action and date range title
+        if self.start_date == self.end_date:
+            title_text = f"Details: {self.start_date.strftime('%d/%m/%Y')}"
+        else:
+            title_text = f"Details: {self.start_date.strftime('%d/%m/%Y')} – {self.end_date.strftime('%d/%m/%Y')}"
+        toolbar = MDTopAppBar(title=title_text, size_hint_y=None, height=dp(56))
+        toolbar.left_action_items = [["arrow-left", lambda x: self.go_back()]]
+        layout.add_widget(toolbar)
+        # Scroll view for details
+        self.scroll = MDScrollView()
+        self.content_layout = MDBoxLayout(orientation='vertical', adaptive_height=True, spacing=dp(8), padding=[dp(12), dp(12)])
+        self.scroll.add_widget(self.content_layout)
+        layout.add_widget(self.scroll)
+        self.add_widget(layout)
+        Clock.schedule_once(lambda dt: self._load_details(), 0)
+
+    def go_back(self):
+        if self.manager:
+            self.manager.current = 'completed_summary'
+
+    def _load_details(self):
+        # Query completions for the selected range and build cards
+        start_dt = datetime(self.start_date.year, self.start_date.month, self.start_date.day, 0, 0, 0)
+        end_dt = datetime(self.end_date.year, self.end_date.month, self.end_date.day, 23, 59, 59)
+        try:
+            items = self.app.db.query(start_dt, end_dt, outcome=None, search_text="", limit=100000, offset=0)
+        except Exception as e:
+            toast(f"Failed to load details: {str(e)}")
+            items = []
+        for item in items:
+            card = self._create_detail_card(item)
+            self.content_layout.add_widget(card)
+        if not items:
+            empty_card = MDCard(size_hint_y=None, height=dp(80), elevation=1, padding=dp(16))
+            empty_card.add_widget(MDLabel(text="No completions in selected range", theme_text_color="Secondary"))
+            self.content_layout.add_widget(empty_card)
+
+    def _create_detail_card(self, item):
+        card = MDCard(size_hint_y=None, height=dp(90), elevation=1, padding=dp(12))
+        layout = MDBoxLayout(orientation='vertical', spacing=dp(4))
+        # Address
+        address_label = MDLabel(text=item['address'], shorten=True)
+        layout.add_widget(address_label)
+        # Outcome and amount
+        comp = item['completion']
+        outcome = comp.get('outcome', 'Done')
+        amount = comp.get('amount', '')
+        outcome_text = outcome
+        if outcome == 'PIF' and amount:
+            outcome_text += f" £{amount}"
+        # Time string: show date and time if range spans multiple days
+        ts = comp.get('timestamp', '')
+        time_str = ""
+        if ts:
+            try:
+                dt_val = datetime.fromisoformat(ts)
+                if self.start_date == self.end_date:
+                    time_str = dt_val.strftime("%H:%M")
+                else:
+                    time_str = dt_val.strftime("%d/%m %H:%M")
+            except Exception:
+                time_str = ts
+        info_row = MDBoxLayout(orientation='horizontal', size_hint_y=None, height=dp(22))
+        info_row.add_widget(MDLabel(text=outcome_text, theme_text_color="Primary"))
+        info_row.add_widget(MDLabel())
+        info_row.add_widget(MDLabel(text=time_str, theme_text_color="Secondary"))
+        layout.add_widget(info_row)
+        # Navigation button row
+        btn_row = MDBoxLayout(orientation='horizontal', size_hint_y=None, height=dp(28))
+        nav_btn = MDFlatButton(text="Navigate", size_hint=(None, None), size=(dp(80), dp(28)), font_size='11sp')
+        nav_btn.bind(on_release=lambda x, addr=item['address']: self._navigate_to_address(addr))
+        btn_row.add_widget(nav_btn)
+        layout.add_widget(btn_row)
+        card.add_widget(layout)
+        return card
+
+    def _navigate_to_address(self, address):
         main_screen = self.app.get_main_screen()
         if main_screen:
+            # Use -1 to indicate navigation from completed list
             main_screen.navigate_to_address(address, -1, from_completed=True)
 
-    def remove_completed(self, index):
-        main_screen = self.app.get_main_screen()
-        if main_screen:
-            main_screen.remove_from_completed(index)
-        try:
-            self.app.db.delete_latest_by_idx(index)
-        except Exception as e:
-            print(f"DB delete error: {e}")
-        self.reset_and_load()
 
-    def show_day_summary(self):
-        main_screen = self.app.get_main_screen()
-        if not main_screen or not main_screen.day_history:
-            toast("No day history available")
+class CompletedSummaryScreen(MDScreen):
+    """Entry point for viewing completed addresses grouped by day"""
+    def __init__(self, app_instance, **kwargs):
+        super().__init__(**kwargs)
+        self.app = app_instance
+        self.name = "completed_summary"
+        self.start_date = None
+        self.end_date = None
+        self._setup_ui()
+
+    def _setup_ui(self):
+        layout = MDBoxLayout(orientation='vertical')
+        toolbar = MDTopAppBar(title="Completed", size_hint_y=None, height=dp(56))
+        toolbar.left_action_items = [["arrow-left", lambda x: self.go_back()]]
+        # Add calendar icon to pick date range and download icon to export completions
+        toolbar.right_action_items = [
+            ["calendar", lambda x: self.open_date_picker()],
+            ["download", lambda x: self.export_summary()],
+            ["file-export", lambda x: self.export_summary_json()],
+        ]
+        layout.add_widget(toolbar)
+        self.scroll = MDScrollView()
+        self.content_layout = MDBoxLayout(orientation='vertical', adaptive_height=True, spacing=dp(8), padding=[dp(12), dp(12)])
+        self.scroll.add_widget(self.content_layout)
+        layout.add_widget(self.scroll)
+        self.add_widget(layout)
+        # Initial message
+        self.content_layout.add_widget(MDLabel(text="Select a date or range to view summary", halign="center", theme_text_color="Secondary"))
+
+    def go_back(self):
+        if self.manager:
+            self.manager.current = 'main_screen'
+
+    def open_date_picker(self):
+        """
+        Launch the calendar widget to select a range of dates.  This
+        method attempts to import MDDatePicker from both the old and
+        new locations used across different KivyMD versions.  If
+        neither import succeeds a message is shown to the user.  When
+        available the date picker is opened in range mode so the user
+        can select a start and end date.  Once the selection is saved
+        the summary view will refresh accordingly.
+        """
+        # Try both import locations to support KivyMD 1.2.0 and 2.x
+        MDDatePicker = None
+        try:
+            from kivymd.uix.picker import MDDatePicker  # type: ignore
+        except Exception:
+            try:
+                from kivymd.uix.pickers import MDDatePicker  # type: ignore
+            except Exception:
+                MDDatePicker = None
+        # If we could not import the picker show an error toast
+        if MDDatePicker is None:
+            toast("Date picker not available")
             return
-        total_days = len(main_screen.day_history)
-        total_sessions = sum(len(sessions) if isinstance(sessions, list) else 1 for sessions in main_screen.day_history.values())
-        if main_screen.current_day_data:
-            current_completed = len(main_screen.current_day_data['addresses_completed'])
-            toast(f"History: {total_days} days, {total_sessions} sessions â€¢ Today: {current_completed} completed")
+        picker = MDDatePicker(mode="range")
+        picker.bind(on_save=self._on_date_save, on_cancel=lambda *a: None)
+        picker.open()
+
+
+    def _on_date_save(self, instance, value, date_range):
+        if not date_range:
+            return
+        self.start_date = date_range[0]
+        self.end_date = date_range[-1]
+        self.load_summary()
+
+    def load_summary(self):
+        """
+        Build the summary view based on the currently selected date
+        range.  If a single day is selected then one card per day is
+        shown (which is always just one).  If multiple days are
+        selected the range is summarised into a single card that
+        aggregates all outcomes and hours across the entire span.  The
+        view is cleared before new cards are added.
+        """
+        self.content_layout.clear_widgets()
+        # If no dates selected do nothing
+        if not self.start_date or not self.end_date:
+            return
+        # Single day case
+        if self.start_date == self.end_date:
+            summary = self._summarise_day(self.start_date)
+            card = self._create_day_card(summary)
+            self.content_layout.add_widget(card)
+            # If there are no completions for this day show a message
+            if not self.content_layout.children:
+                self.content_layout.add_widget(MDLabel(text="No data for selected date", halign="center", theme_text_color="Secondary"))
+            return
+        # Multi-day range: summarise across the entire span
+        summary = self._summarise_range(self.start_date, self.end_date)
+        card = self._create_range_card(summary)
+        self.content_layout.add_widget(card)
+
+    def _summarise_day(self, day_date):
+        start_dt = datetime(day_date.year, day_date.month, day_date.day, 0, 0, 0)
+        end_dt = datetime(day_date.year, day_date.month, day_date.day, 23, 59, 59)
+        items = []
+        try:
+            items = self.app.db.query(start_dt, end_dt, outcome=None, search_text="", limit=100000, offset=0)
+        except Exception:
+            items = []
+        outcomes = {"PIF": 0, "DA": 0, "Done": 0}
+        timestamps = []
+        for item in items:
+            oc = item['completion'].get('outcome', 'Done')
+            outcomes[oc] = outcomes.get(oc, 0) + 1
+            ts = item['completion'].get('timestamp')
+            try:
+                timestamps.append(datetime.fromisoformat(ts))
+            except Exception:
+                pass
+        hours_worked = None
+        main_screen = self.app.get_main_screen() if hasattr(self.app, 'get_main_screen') else None
+        day_str = day_date.strftime("%Y-%m-%d")
+        if main_screen and main_screen.day_history:
+            record = main_screen.day_history.get(day_str)
+            session = None
+            if record:
+                if isinstance(record, list):
+                    if record:
+                        session = record[-1]
+                elif isinstance(record, dict):
+                    session = record
+            if session:
+                try:
+                    st = datetime.fromisoformat(session.get('start_time'))
+                    et = datetime.fromisoformat(session.get('end_time'))
+                    hours_worked = (et - st).total_seconds() / 3600.0
+                except Exception:
+                    hours_worked = None
+        if hours_worked is None and timestamps:
+            earliest = min(timestamps)
+            latest = max(timestamps)
+            hours_worked = (latest - earliest).total_seconds() / 3600.0
+        return {
+            'date': day_date,
+            'outcomes': outcomes,
+            'hours': hours_worked,
+        }
+
+    def _create_day_card(self, summary):
+        card = MDCard(size_hint_y=None, height=dp(85), elevation=2, padding=dp(12), radius=[6])
+        layout = MDBoxLayout(orientation='horizontal', spacing=dp(12))
+        left_col = MDBoxLayout(orientation='vertical', size_hint_x=0.6)
+        date_label = MDLabel(text=summary['date'].strftime("%d/%m/%y"), font_style="Subtitle1")
+        if summary['hours'] is not None:
+            hrs = summary['hours']
+            hours_int = int(hrs)
+            minutes_int = int((hrs - hours_int) * 60)
+            hours_text = f"{hours_int}h {minutes_int}m"
         else:
-            toast(f"History: {total_days} days, {total_sessions} sessions")
+            hours_text = "N/A"
+        hours_label = MDLabel(text=f"Hours: {hours_text}", theme_text_color="Secondary", font_size='12sp')
+        left_col.add_widget(date_label)
+        left_col.add_widget(hours_label)
+        mid_col = MDBoxLayout(orientation='horizontal', spacing=dp(8), size_hint_x=0.3)
+        for key in ["PIF", "DA", "Done"]:
+            count = summary['outcomes'].get(key, 0)
+            short = "P" if key == "PIF" else ("D" if key == "DA" else "C")
+            lbl = MDLabel(text=f"{short}:{count}", halign="center")
+            mid_col.add_widget(lbl)
+        right_col = MDBoxLayout(orientation='horizontal', size_hint_x=0.1)
+        view_btn = MDFlatButton(text="View", size_hint=(None, None), size=(dp(60), dp(28)), font_size='11sp')
+        view_btn.bind(on_release=lambda x, d=summary['date']: self._on_view_day(d))
+        right_col.add_widget(view_btn)
+        layout.add_widget(left_col)
+        layout.add_widget(mid_col)
+        layout.add_widget(right_col)
+        card.add_widget(layout)
+        return card
 
-    def clear_completed_dialog(self):
-        if not hasattr(self, '_clear_dialog'):
-            self._clear_dialog = MDDialog(title="Clear All Completed?", text="This cannot be undone.", buttons=[
-                MDFlatButton(text="Cancel", on_release=lambda x: self._clear_dialog.dismiss()),
-                MDFlatButton(text="Clear All", theme_text_color="Error", on_release=lambda x: self._clear_all()),
-            ])
-        self._clear_dialog.open()
+    def _on_view_day(self, day_date):
+        details_screen = DayDetailsScreen(self.app, day_date)
+        if not any(s.name == details_screen.name for s in self.manager.screens):
+            self.manager.add_widget(details_screen)
+        self.manager.current = details_screen.name
 
-    def _clear_all(self):
-        main_screen = self.app.get_main_screen()
-        if main_screen:
-            main_screen.clear_all_completed()
+    def _summarise_range(self, start_date, end_date):
+        """
+        Compute aggregate metrics across a range of dates.  Returns a
+        dictionary with the range, a dictionary of outcomes counts and
+        a human-readable hours string.  Database queries and day
+        history data are used to compute the values.
+        """
+        # Query completions across the entire range
+        start_dt = datetime(start_date.year, start_date.month, start_date.day, 0, 0, 0)
+        end_dt = datetime(end_date.year, end_date.month, end_date.day, 23, 59, 59)
         try:
-            self.app.db.clear_all()
-        except Exception as e:
-            print(f"DB clear error: {e}")
-        self.reset_and_load()
-        self._clear_dialog.dismiss()
+            items = self.app.db.query(start_dt, end_dt, outcome=None, search_text="", limit=1000000, offset=0)
+        except Exception:
+            items = []
+        outcomes = {"PIF": 0, "DA": 0, "Done": 0}
+        timestamps = []
+        for item in items:
+            oc = item['completion'].get('outcome', 'Done')
+            outcomes[oc] = outcomes.get(oc, 0) + 1
+            ts = item['completion'].get('timestamp')
+            try:
+                timestamps.append(datetime.fromisoformat(ts))
+            except Exception:
+                pass
+        # Aggregate hours worked across the range.  If day history
+        # entries exist, sum the duration of each session on each
+        # individual day.  Otherwise, derive hours per day from the
+        # completion timestamps on that day and sum them.
+        total_seconds = 0.0
+        main_screen = self.app.get_main_screen() if hasattr(self.app, 'get_main_screen') else None
+        # Convert timestamp strings to datetime objects grouped by date
+        ts_by_day = {}
+        for ts in timestamps:
+            day_key = ts.date()
+            ts_by_day.setdefault(day_key, []).append(ts)
+        current = start_date
+        while current <= end_date:
+            day_seconds = 0.0
+            day_str = current.strftime("%Y-%m-%d")
+            # Prefer recorded day_history durations if available
+            if main_screen and main_screen.day_history and day_str in main_screen.day_history:
+                rec = main_screen.day_history[day_str]
+                sessions = rec if isinstance(rec, list) else [rec]
+                for sess in sessions:
+                    try:
+                        day_seconds += sess.get('duration_seconds', 0)
+                    except Exception:
+                        pass
+            # If no day history, derive from timestamps on that day
+            if day_seconds == 0 and ts_by_day.get(current):
+                day_ts = ts_by_day[current]
+                day_seconds = (max(day_ts) - min(day_ts)).total_seconds()
+            total_seconds += day_seconds
+            current += timedelta(days=1)
+        # Convert seconds to human readable hours text
+        if total_seconds > 0:
+            hrs = int(total_seconds // 3600)
+            mins = int((total_seconds % 3600) // 60)
+            hours_text = f"{hrs}h {mins}m"
+        else:
+            hours_text = "N/A"
+        return {
+            'start_date': start_date,
+            'end_date': end_date,
+            'outcomes': outcomes,
+            'hours': hours_text,
+        }
 
-    def export_completed(self):
-        threading.Thread(target=self._export_background, daemon=True).start()
+    def _create_range_card(self, summary):
+        """
+        Create a summary card for a multi-day range.  The card shows
+        the start and end dates, total hours worked across all days in
+        the range and aggregated counts of PIF, DA and Done outcomes.
+        A "View" button allows drilling down to the details for the
+        entire range.
+        """
+        card = MDCard(size_hint_y=None, height=dp(90), elevation=2, padding=dp(12), radius=[6])
+        layout = MDBoxLayout(orientation='horizontal', spacing=dp(12))
+        left_col = MDBoxLayout(orientation='vertical', size_hint_x=0.6)
+        # Display date range on a single line
+        if summary['start_date'] == summary['end_date']:
+            date_text = summary['start_date'].strftime("%d/%m/%y")
+        else:
+            date_text = f"{summary['start_date'].strftime('%d/%m/%y')} – {summary['end_date'].strftime('%d/%m/%y')}"
+        date_label = MDLabel(text=date_text, font_style="Subtitle1")
+        hours_label = MDLabel(text=f"Hours: {summary['hours']}", theme_text_color="Secondary", font_size='12sp')
+        left_col.add_widget(date_label)
+        left_col.add_widget(hours_label)
+        # Outcome counts in middle column
+        mid_col = MDBoxLayout(orientation='horizontal', spacing=dp(8), size_hint_x=0.3)
+        for key in ["PIF", "DA", "Done"]:
+            count = summary['outcomes'].get(key, 0)
+            short = "P" if key == "PIF" else ("D" if key == "DA" else "C")
+            lbl = MDLabel(text=f"{short}:{count}", halign="center")
+            mid_col.add_widget(lbl)
+        # View button to show range details
+        right_col = MDBoxLayout(orientation='horizontal', size_hint_x=0.1)
+        view_btn = MDFlatButton(text="View", size_hint=(None, None), size=(dp(60), dp(28)), font_size='11sp')
+        view_btn.bind(on_release=lambda x: self._on_view_range(summary['start_date'], summary['end_date']))
+        right_col.add_widget(view_btn)
+        layout.add_widget(left_col)
+        layout.add_widget(mid_col)
+        layout.add_widget(right_col)
+        card.add_widget(layout)
+        return card
 
-    def _export_background(self):
-        try:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = f"completed_addresses_{timestamp}.csv"
-            filepath = self._get_export_path(filename)
-            # Export all matches under current filters
-            offset = 0
-            batch = 500
-            with open(filepath, 'w', newline='', encoding='utf-8') as f:
-                writer = csv.writer(f)
-                writer.writerow(['Index', 'Address', 'Outcome', 'Amount', 'Date', 'Time'])
-                total = self.app.db.count(self.date_from, self.date_to, self.outcome_filter, self.search_query)
-                while offset < total:
-                    items = self.app.db.query(self.date_from, self.date_to, self.outcome_filter, self.search_query, limit=batch, offset=offset)
-                    for item in items:
-                        comp = item['completion']
-                        try:
-                            dt = datetime.fromisoformat(comp.get('timestamp', ''))
-                            date_str = dt.strftime("%Y-%m-%d")
-                            time_str = dt.strftime("%H:%M:%S")
-                        except:
-                            date_str = time_str = "Unknown"
-                        writer.writerow([item['index'] + 1, item['address'], comp.get('outcome', 'Done'), comp.get('amount', ''), date_str, time_str])
-                    offset += len(items)
-            Clock.schedule_once(lambda dt: toast(f"Exported to {filename}"), 0)
-        except Exception as e:
-            Clock.schedule_once(lambda dt: toast(f"Export failed: {str(e)}"), 0)
+    def _on_view_range(self, start_date, end_date):
+        """
+        Navigate to the details screen for the selected date range.  A
+        new RangeDetailsScreen will be created on demand and added to
+        the manager.  Subsequent requests reuse the existing screen.
+        """
+        details_screen = RangeDetailsScreen(self.app, start_date, end_date)
+        if not any(s.name == details_screen.name for s in self.manager.screens):
+            self.manager.add_widget(details_screen)
+        self.manager.current = details_screen.name
 
-    def _get_export_path(self, filename):
+    def export_summary(self):
+        """
+        Export all completions within the selected date range (or all
+        completions if no range is selected) to a plain text file.  The
+        exported data mirrors what is displayed in the completed list:
+        each line contains the list index, address, outcome with amount
+        (if PIF), and the full timestamp.  The file is saved to
+        internal storage on Android or to the user's home directory on
+        desktop.  A toast notification reports the filename on
+        completion.
+        """
+        # Determine export range; if no dates selected export all
+        if self.start_date and self.end_date:
+            start_dt = datetime(self.start_date.year, self.start_date.month, self.start_date.day, 0, 0, 0)
+            end_dt = datetime(self.end_date.year, self.end_date.month, self.end_date.day, 23, 59, 59)
+        else:
+            start_dt = None
+            end_dt = None
+        # Generate output filename
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        fname = f"completed_addresses_{timestamp}.txt"
+        # Build file path depending on platform
         if platform == 'android' and ANDROID_AVAILABLE:
             try:
                 app_path = PythonActivity.mActivity.getFilesDir().getAbsolutePath()
-                return os.path.join(app_path, filename)
-            except:
-                return filename
-        return os.path.join(os.path.expanduser("~"), filename)
+                filepath = os.path.join(app_path, fname)
+            except Exception:
+                filepath = fname
+        else:
+            filepath = os.path.join(os.path.expanduser("~"), fname)
+        # Use a background thread for disk I/O
+        def worker():
+            try:
+                with open(filepath, 'w', encoding='utf-8') as f:
+                    offset = 0
+                    batch = 500
+                    while True:
+                        items = self.app.db.query(start_dt, end_dt, outcome=None, search_text="", limit=batch, offset=offset)
+                        if not items:
+                            break
+                        for item in items:
+                            comp = item['completion']
+                            idx = item['index'] + 1
+                            addr = item['address']
+                            out = comp.get('outcome', 'Done')
+                            amt = comp.get('amount', '')
+                            outcome_text = out if out != 'PIF' or not amt else f"{out} £{amt}"
+                            ts = comp.get('timestamp', '')
+                            line = f"{idx}. {addr} | {outcome_text} | {ts}\n"
+                            f.write(line)
+                        offset += len(items)
+                Clock.schedule_once(lambda dt: toast(f"Exported to {fname}"), 0)
+            except Exception as e:
+                Clock.schedule_once(lambda dt: toast(f"Export failed: {str(e)}"), 0)
+        threading.Thread(target=worker, daemon=True).start()
+
+    def export_summary_json(self):
+        """
+        Export all completions within the selected range (or all
+        completions if no range is selected) as a JSON file.  The
+        exported file contains a list of objects with keys: index,
+        address, outcome, amount, and timestamp.  The file is saved to
+        the internal storage (Android) or user home directory (desktop).
+        A toast notification reports the filename when complete.
+        """
+        # Determine export range
+        if self.start_date and self.end_date:
+            start_dt = datetime(self.start_date.year, self.start_date.month, self.start_date.day, 0, 0, 0)
+            end_dt = datetime(self.end_date.year, self.end_date.month, self.end_date.day, 23, 59, 59)
+        else:
+            start_dt = None
+            end_dt = None
+        # File name
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        fname = f"completed_addresses_{timestamp}.json"
+        # Determine path
+        if platform == 'android' and ANDROID_AVAILABLE:
+            try:
+                app_path = PythonActivity.mActivity.getFilesDir().getAbsolutePath()
+                filepath = os.path.join(app_path, fname)
+            except Exception:
+                filepath = fname
+        else:
+            filepath = os.path.join(os.path.expanduser("~"), fname)
+        # Export in background thread
+        def worker():
+            try:
+                data = []
+                offset = 0
+                batch = 500
+                while True:
+                    items = self.app.db.query(start_dt, end_dt, outcome=None, search_text="", limit=batch, offset=offset)
+                    if not items:
+                        break
+                    for item in items:
+                        comp = item['completion']
+                        data.append({
+                            'index': item['index'] + 1,
+                            'address': item['address'],
+                            'outcome': comp.get('outcome', 'Done'),
+                            'amount': comp.get('amount', ''),
+                            'timestamp': comp.get('timestamp', '')
+                        })
+                    offset += len(items)
+                with open(filepath, 'w', encoding='utf-8') as f:
+                    json.dump(data, f, indent=2)
+                Clock.schedule_once(lambda dt: toast(f"Exported to {fname}"), 0)
+            except Exception as e:
+                Clock.schedule_once(lambda dt: toast(f"Export failed: {str(e)}"), 0)
+        threading.Thread(target=worker, daemon=True).start()
 
 
 class AddressNavigatorApp(MDApp):
     def build(self):
-        try:
-            self.title = "Address Navigator"
-            self.theme_cls.theme_style = "Light"
-            self.theme_cls.primary_palette = "Blue"
-            # DB path
-            self.db = CompletionDB(self._get_db_path())
-            # Create screen manager
-            self.screen_manager = MDScreenManager()
-            # Create main screen
-            self.main_screen = MainScreen(name="main_screen")
-            self.screen_manager.add_widget(self.main_screen)
-            # Create completed screen immediately (avoid race)
-            self._create_completed_screen(0)
-            # Migrate any existing JSON completions (once) into DB
-            Clock.schedule_once(self._maybe_migrate_completions, 0.5)
-            return self.screen_manager
-        except Exception as e:
-            print(f"Build error: {e}")
-            error_screen = MDScreen()
-            error_layout = MDBoxLayout(orientation='vertical', padding=dp(20))
-            error_layout.add_widget(MDLabel(text=f"Application Error: {str(e)}", theme_text_color="Error", halign="center"))
-            error_screen.add_widget(error_layout)
-            return error_screen
+        self.title = "Address Navigator"
+        self.theme_cls.theme_style = "Light"
+        self.theme_cls.primary_palette = "Blue"
+        self.db = CompletionDB(self._get_db_path())
+        self.screen_manager = MDScreenManager()
+        self.main_screen = MainScreen(name="main_screen")
+        self.screen_manager.add_widget(self.main_screen)
+        self.screen_manager.add_widget(CompletedSummaryScreen(self, name="completed_summary"))
+        return self.screen_manager
 
-    def _create_completed_screen(self, dt):
-        try:
-            if not any(screen.name == "completed_screen" for screen in self.screen_manager.screens):
-                completed_screen = CompletedScreen(self, name="completed_screen")
-                self.screen_manager.add_widget(completed_screen)
-        except Exception as e:
-            print("Error creating completed screen:", e)
-            traceback.print_exc()
-
-    def _maybe_migrate_completions(self, dt):
-        """One-way migrate in-memory JSON completions into SQLite if DB empty."""
-        try:
-            ms = self.get_main_screen()
-            if self.db.count() == 0 and ms and ms.completed_data:
-                for idx, comp in ms.completed_data.items():
-                    addr = ms.addresses[idx] if idx < len(ms.addresses) else ""
-                    ts = comp.get('timestamp', datetime.now().isoformat())
-                    outcome = comp.get('outcome', 'Done')
-                    amt = comp.get('amount', None)
-                    try:
-                        amt = float(amt) if amt not in (None, "") else None
-                    except:
-                        amt = None
-                    self.db.insert_completion(idx, addr, outcome, amt, ts)
-                print("Migration: completed_data -> SQLite inserted")
-        except Exception as e:
-            print(f"Migration error: {e}")
+    def get_main_screen(self):
+        return self.main_screen
 
     def _get_db_path(self):
         fname = "address_navigator.db"
@@ -1528,15 +1810,6 @@ class AddressNavigatorApp(MDApp):
             except:
                 return fname
         return os.path.join(os.path.expanduser("~"), fname)
-
-    def get_main_screen(self):
-        return self.main_screen
-
-    def on_start(self):
-        try:
-            pass
-        except Exception as e:
-            print(f"Startup error: {e}")
 
 
 if __name__ == "__main__":
