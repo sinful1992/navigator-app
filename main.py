@@ -238,7 +238,7 @@ class AddressCard(MDCard):
     def update_card(self, index, address, status_info, callbacks):
         self.address_index = index
         self.address_text = address
-        prefix = "\u25B6 " if status_info.get('is_active') else ""
+        prefix = "○ " if status_info.get('is_active') else ""
         self.address_label.text = f"{prefix}{index + 1}. {address}"
         self._update_appearance(status_info)
         self._update_buttons(status_info, callbacks)
@@ -256,7 +256,7 @@ class AddressCard(MDCard):
             if outcome == "PIF":
                 self.md_bg_color = (0.92, 1.0, 0.92, 1.0)
                 amount = completion.get('amount', '')
-                self.status_label.text = f"PIF £{amount}" if amount else "PIF"
+                self.status_label.text = f"PIF Â£{amount}" if amount else "PIF"
                 self.status_label.text_color = [0, 0.7, 0, 1]
             elif outcome == "DA":
                 self.md_bg_color = (1.0, 0.96, 0.96, 1.0)
@@ -930,6 +930,50 @@ class MainScreen(MDScreen):
         except Exception as e:
             toast(f"Error opening file browser: {str(e)}")
 
+    def _on_android_file_selected(self, shared_file_list):
+        """
+        Callback used when running on Android and a file is selected
+        using the androidstorage4kivy Chooser.  The selected item(s)
+        come in as a list of shared file URIs.  We copy the first
+        selected file into a private location using the SharedStorage
+        helper.  Once copied, the file extension is inspected and
+        dispatched to the CSV or Excel loader on the main thread.
+
+        Without this handler the Chooser callback will be ignored
+        entirely, preventing CSV files from being loaded on Android.
+        """
+        # Run the copy and dispatch in a background thread so as
+        # not to block the UI.  Android storage APIs can be slow.
+        def process():
+            try:
+                # Ensure we have something selected and a storage
+                # handler instance.  The Chooser passes a list of
+                # document URIs; if it's empty we can do nothing.
+                if not shared_file_list or not self.storage_handler:
+                    return
+                # Copy the first shared file to our private app
+                # storage.  copy_from_shared() returns a local
+                # filename on success or None on failure.
+                private_path = self.storage_handler.copy_from_shared(shared_file_list[0])
+                if not private_path or not os.path.exists(private_path):
+                    Clock.schedule_once(lambda dt: toast("Failed to access file"), 0)
+                    return
+                lower = private_path.lower()
+                # Dispatch to the appropriate loader based on file
+                # extension.  Use Clock.schedule_once() so the UI
+                # updates occur on the main thread.
+                if lower.endswith('.csv'):
+                    Clock.schedule_once(lambda dt: self._load_csv_file(private_path), 0)
+                elif lower.endswith(('.xlsx', '.xls')):
+                    Clock.schedule_once(lambda dt: self._load_excel_file(private_path), 0)
+                else:
+                    Clock.schedule_once(lambda dt: toast("Unsupported file type"), 0)
+            except Exception as e:
+                # Report any error to the user.  Exceptions in
+                # background threads do not propagate to the UI.
+                Clock.schedule_once(lambda dt: toast(f"File error: {str(e)}"), 0)
+        threading.Thread(target=process, daemon=True).start()
+
 
     def _on_file_selected(self, path):
         """
@@ -1262,7 +1306,7 @@ class DayDetailsScreen(MDScreen):
             time_text = ts or "Unknown"
         time_label = MDLabel(text=time_text, theme_text_color="Secondary", font_size='11sp')
         amount_text = item['completion'].get('amount', '')
-        amount_label = MDLabel(text=f"Â£{amount_text}" if amount_text else "", theme_text_color="Secondary", font_size='11sp')
+        amount_label = MDLabel(text=f"£{amount_text}" if amount_text else "", theme_text_color="Secondary", font_size='11sp')
         layout.add_widget(top_row)
         info_row = MDBoxLayout(orientation='horizontal')
         info_row.add_widget(time_label)
@@ -1347,7 +1391,7 @@ class RangeDetailsScreen(MDScreen):
         amount = comp.get('amount', '')
         outcome_text = outcome
         if outcome == 'PIF' and amount:
-            outcome_text += f" Â£{amount}"
+            outcome_text += f" £{amount}"
         # Time string: show date and time if range spans multiple days
         ts = comp.get('timestamp', '')
         time_str = ""
@@ -1728,7 +1772,7 @@ class CompletedSummaryScreen(MDScreen):
                             addr = item['address']
                             out = comp.get('outcome', 'Done')
                             amt = comp.get('amount', '')
-                            outcome_text = out if out != 'PIF' or not amt else f"{out} Â£{amt}"
+                            outcome_text = out if out != 'PIF' or not amt else f"{out} £{amt}"
                             ts = comp.get('timestamp', '')
                             line = f"{idx}. {addr} | {outcome_text} | {ts}\n"
                             f.write(line)
