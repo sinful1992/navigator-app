@@ -238,7 +238,7 @@ class AddressCard(MDCard):
     def update_card(self, index, address, status_info, callbacks):
         self.address_index = index
         self.address_text = address
-        prefix = "▶ " if status_info.get('is_active') else ""
+        prefix = "\u25B6 " if status_info.get('is_active') else ""
         self.address_label.text = f"{prefix}{index + 1}. {address}"
         self._update_appearance(status_info)
         self._update_buttons(status_info, callbacks)
@@ -421,9 +421,12 @@ class MainScreen(MDScreen):
     def _setup_ui(self):
         layout = MDBoxLayout(orientation='vertical')
         self.toolbar = MDTopAppBar(title="Address Navigator", size_hint_y=None, height=dp(56))
+        # Use consistent, outline-style icons for the action bar.  The second
+        # item uses "playlist-check" (a list with a check mark) instead of
+        # "check-all" to better match the outline style of the other icons.
         self.toolbar.right_action_items = [
             ["folder-open", lambda x: self.load_file()],
-            ["check-all", lambda x: self.show_completed_screen()],
+            ["playlist-check", lambda x: self.show_completed_screen()],
             ["calendar-clock", lambda x: self.show_day_tracking_dialog()],
             ["refresh", lambda x: self.refresh_display()],
         ]
@@ -715,7 +718,7 @@ class MainScreen(MDScreen):
                 start_str = start_time.strftime('%H:%M')
             except Exception:
                 start_str = "--:--"
-            self.day_status_label.text = f"Day started: {start_str} • Completed: {completed_today}"
+            self.day_status_label.text = f"Day started: {start_str} â€¢ Completed: {completed_today}"
             Animation(opacity=1, height=dp(40), duration=0.3).start(self.day_status_card)
         else:
             # Hide the bar when no day session is active
@@ -863,7 +866,7 @@ class MainScreen(MDScreen):
         msg = f"History: {total_days} days, {total_sessions} sessions"
         if self.current_day_data:
             current_completed = len(self.current_day_data['addresses_completed'])
-            msg += f" • Today: {current_completed} completed"
+            msg += f" â€¢ Today: {current_completed} completed"
         toast(msg)
         try:
             if hasattr(self, '_day_dialog') and self._day_dialog:
@@ -1259,7 +1262,7 @@ class DayDetailsScreen(MDScreen):
             time_text = ts or "Unknown"
         time_label = MDLabel(text=time_text, theme_text_color="Secondary", font_size='11sp')
         amount_text = item['completion'].get('amount', '')
-        amount_label = MDLabel(text=f"£{amount_text}" if amount_text else "", theme_text_color="Secondary", font_size='11sp')
+        amount_label = MDLabel(text=f"Â£{amount_text}" if amount_text else "", theme_text_color="Secondary", font_size='11sp')
         layout.add_widget(top_row)
         info_row = MDBoxLayout(orientation='horizontal')
         info_row.add_widget(time_label)
@@ -1299,7 +1302,7 @@ class RangeDetailsScreen(MDScreen):
         if self.start_date == self.end_date:
             title_text = f"Details: {self.start_date.strftime('%d/%m/%Y')}"
         else:
-            title_text = f"Details: {self.start_date.strftime('%d/%m/%Y')} – {self.end_date.strftime('%d/%m/%Y')}"
+            title_text = f"Details: {self.start_date.strftime('%d/%m/%Y')} â€“ {self.end_date.strftime('%d/%m/%Y')}"
         toolbar = MDTopAppBar(title=title_text, size_hint_y=None, height=dp(56))
         toolbar.left_action_items = [["arrow-left", lambda x: self.go_back()]]
         layout.add_widget(toolbar)
@@ -1344,7 +1347,7 @@ class RangeDetailsScreen(MDScreen):
         amount = comp.get('amount', '')
         outcome_text = outcome
         if outcome == 'PIF' and amount:
-            outcome_text += f" £{amount}"
+            outcome_text += f" Â£{amount}"
         # Time string: show date and time if range spans multiple days
         ts = comp.get('timestamp', '')
         time_str = ""
@@ -1393,8 +1396,13 @@ class CompletedSummaryScreen(MDScreen):
         toolbar = MDTopAppBar(title="Completed", size_hint_y=None, height=dp(56))
         toolbar.left_action_items = [["arrow-left", lambda x: self.go_back()]]
         # Add calendar icon to pick date range and download icon to export completions
+        # Use consistent outline icons for the action bar.  The calendar icon
+        # uses the "calendar-range" glyph (an outline calendar with a range
+        # indicator) so it visually matches the main screenâ€™s style.  The
+        # download and file-export actions retain the same icons but these
+        # names map to outline icons in the MaterialDesign set.
         toolbar.right_action_items = [
-            ["calendar", lambda x: self.open_date_picker()],
+            ["calendar-range", lambda x: self.open_date_picker()],
             ["download", lambda x: self.export_summary()],
             ["file-export", lambda x: self.export_summary_json()],
         ]
@@ -1640,7 +1648,7 @@ class CompletedSummaryScreen(MDScreen):
         if summary['start_date'] == summary['end_date']:
             date_text = summary['start_date'].strftime("%d/%m/%y")
         else:
-            date_text = f"{summary['start_date'].strftime('%d/%m/%y')} – {summary['end_date'].strftime('%d/%m/%y')}"
+            date_text = f"{summary['start_date'].strftime('%d/%m/%y')} â€“ {summary['end_date'].strftime('%d/%m/%y')}"
         date_label = MDLabel(text=date_text, font_style="Subtitle1")
         hours_label = MDLabel(text=f"Hours: {summary['hours']}", theme_text_color="Secondary", font_size='12sp')
         left_col.add_widget(date_label)
@@ -1720,7 +1728,7 @@ class CompletedSummaryScreen(MDScreen):
                             addr = item['address']
                             out = comp.get('outcome', 'Done')
                             amt = comp.get('amount', '')
-                            outcome_text = out if out != 'PIF' or not amt else f"{out} £{amt}"
+                            outcome_text = out if out != 'PIF' or not amt else f"{out} Â£{amt}"
                             ts = comp.get('timestamp', '')
                             line = f"{idx}. {addr} | {outcome_text} | {ts}\n"
                             f.write(line)
