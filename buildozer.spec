@@ -11,7 +11,7 @@ version = 1.0.2
 # 1. babel - for date/time formatting and localization
 # 2. python-dateutil - for date parsing
 # 3. pytz - for timezone handling
-requirements = python3,kivy==2.3.0,kivymd==1.2.0,androidstorage4kivy,pyjnius,openpyxl==3.1.2,et_xmlfile==1.1.0,babel,python-dateutil,pytz
+requirements = python3,kivy==2.3.0,kivymd==1.2.0,androidstorage4kivy,pyjnius,openpyxl==3.1.2,et_xmlfile==1.1.0,babel,python-dateutil,pytz,calendar
 
 # Android targets
 android.api = 35
