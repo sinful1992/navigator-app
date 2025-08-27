@@ -38,7 +38,7 @@ except ImportError:
 # not include MDDatePicker.  If the import fails, we provide a text
 # input fallback for selecting dates.
 try:
-    from kivymd.uix.picker import MDDatePicker  # noqa: F401
+    from kivymd.uix.pickers import MDDatePicker  # noqa: F401
     HAS_DATE_PICKER = True
 except Exception:
     HAS_DATE_PICKER = False
