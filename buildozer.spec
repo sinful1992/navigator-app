@@ -8,7 +8,12 @@ entrypoint = main.py
 version = 1.0.2
 
 # Enhanced requirements - explicit KivyMD components and dependencies
-requirements = python3,kivy==2.3.0,kivymd==1.2.0,androidstorage4kivy,pyjnius,openpyxl==3.1.2,et_xmlfile==1.1.0,python-dateutil,babel,pytz
+# Use KivyMD 2.x (master/dev)
+requirements = python3,kivy==2.3.0,"kivymd @ git+https://github.com/kivymd/KivyMD@master",androidstorage4kivy,pyjnius,openpyxl==3.1.2,et_xmlfile==1.1.0,python-dateutil,babel,pytz
+
+# Ensure pip doesn’t reuse an old cached 1.x
+pip_options = --no-cache-dir
+
 
 # Force include KivyMD picker modules
 source.include_exts = py,png,jpg,kv,atlas,json
