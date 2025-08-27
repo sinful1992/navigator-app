@@ -1351,23 +1351,38 @@ class CompletedSummaryScreen(MDScreen):
 
     def open_date_picker(self):
         """
-        Attempt to open the KivyMD date picker.  On recent versions of
-        KivyMD (e.g. 1.1.0 and later) the ``MDDatePicker`` supports the
-        ``mode="range"`` keyword and emits an ``on_save`` event when the
-        user confirms their selection.  For these versions we bind the
-        ``on_save`` callback to :meth:`_on_date_save` and present a
-        single dialog that lets the user pick a start and end date.
+        Open a date picker dialog that supports both single-date and
+        range selection across multiple KivyMD versions.  This method
+        attempts the following strategies in order:
 
-        Older KivyMD releases (notably 0.104.x) expose ``MDDatePicker``
-        under a different module and require a ``callback`` argument
-        instead of ``on_save``.  They also do not support range selection.
-        In this case we transparently guide the user through two
-        sequential calendar dialogs—first selecting a start date and then
-        an end date via :meth:`_start_old_datepicker_sequence`.  The
-        manual text entry fallback remains available internally for
-        developers but is no longer triggered automatically.
+        1. **Modern ``MDDatePicker`` (KivyMD ≥1.1.0):** Try to import
+           :class:`~kivymd.uix.pickers.MDDatePicker` or
+           :class:`~kivymd.uix.picker.MDDatePicker` and instantiate it
+           with ``mode="range"``.  Bind its ``on_save`` event to
+           :meth:`_on_date_save`.  When successful, this presents a
+           single calendar dialog for selecting a start and end date.  If
+           instantiation fails (e.g., the ``mode`` keyword is not
+           supported or the event is missing), we proceed to the next
+           strategy.
+
+        2. **Modal date picker (KivyMD ≥2.0.0):** Try to import
+           :class:`~kivymd.uix.pickers.MDModalDatePicker`.  Instantiate
+           it with ``mode="range"`` and bind its ``on_ok`` event to
+           :meth:`_on_modal_date_ok`.  This dialog returns the selected
+           dates via its :meth:`get_date` method.  If this import or
+           instantiation fails, we continue to the next strategy.
+
+        3. **Legacy ``MDDatePicker`` without range support (KivyMD 0.104.x
+           and earlier):** Fall back to the older API which requires a
+           ``callback`` argument and does not support range selection.  We
+           prompt the user for a start date followed by an end date via
+           :meth:`_start_old_datepicker_sequence`.
+
+        If all attempts fail we display a brief toast informing the user
+        that a date picker is not available.
         """
-        # Attempt to import the MDDatePicker from the possible module paths.
+        # Try to import MDDatePicker from either the new or old module paths.
+        MDDatePicker = None  # type: ignore
         try:
             from kivymd.uix.picker import MDDatePicker  # type: ignore
         except Exception:
@@ -1375,24 +1390,81 @@ class CompletedSummaryScreen(MDScreen):
                 from kivymd.uix.pickers import MDDatePicker  # type: ignore
             except Exception:
                 MDDatePicker = None  # type: ignore
-        # If we cannot import the class at all, display a toast and return.
-        if not MDDatePicker:
-            toast("Date picker not available")
-            return
-        # Try the modern API with mode="range" and on_save binding. If it
-        # raises a TypeError (unknown keyword) or AttributeError (missing
-        # on_save), we fall back to a sequential calendar selection for
-        # older versions.
+        # Try to import MDModalDatePicker (available in KivyMD 2.0.0+).
+        MDModalDatePicker = None  # type: ignore
         try:
-            picker = MDDatePicker(mode="range")  # type: ignore
-            picker.bind(on_save=self._on_date_save, on_cancel=lambda *a: None)
-            picker.open()
+            from kivymd.uix.pickers import MDModalDatePicker  # type: ignore
         except Exception:
-            # On older versions the MDDatePicker constructor requires a
-            # callback argument and does not support range selection. We
-            # guide the user through selecting a start date followed by an
-            # end date using two sequential pickers.
+            MDModalDatePicker = None  # type: ignore
+        # First, attempt to use the modern MDDatePicker with range support.
+        if MDDatePicker:
+            try:
+                picker = MDDatePicker(mode="range")  # type: ignore
+                # Some versions of MDDatePicker have an ``on_save`` event; if
+                # available we bind it, otherwise this will raise an
+                # AttributeError and we'll fall back below.
+                picker.bind(on_save=self._on_date_save, on_cancel=lambda *a: None)
+                picker.open()
+                return
+            except Exception:
+                # If instantiation fails due to unsupported kwargs or missing
+                # event, we will try modal and legacy implementations.
+                pass
+        # Next, attempt to use the modal date picker with range support.
+        if MDModalDatePicker:
+            try:
+                picker = MDModalDatePicker(mode="range")  # type: ignore
+                # Bind the on_ok event to handle the selected dates.
+                picker.bind(on_ok=self._on_modal_date_ok, on_cancel=lambda *a: None)
+                picker.open()
+                return
+            except Exception:
+                # If the modal picker also fails, continue to legacy fallback.
+                pass
+        # Legacy fallback: use sequential MDDatePicker callbacks if available.
+        if MDDatePicker:
             self._start_old_datepicker_sequence(MDDatePicker)
+            return
+        # If no date picker classes could be imported, inform the user.
+        toast("Date picker not available")
+
+    def _on_modal_date_ok(self, instance_date_picker, *args):
+        """
+        Handler for the ``on_ok`` event emitted by
+        :class:`~kivymd.uix.pickers.MDModalDatePicker`.  This event is
+        triggered when the user confirms their selection in a modal date
+        picker.  We extract the selected dates via the instance's
+        :meth:`get_date` method (which returns a list of
+        ``datetime.date`` objects), assign them to ``start_date`` and
+        ``end_date``, and then load the summary.
+
+        :param instance_date_picker: the modal date picker instance
+        :param args: additional positional arguments (ignored)
+        """
+        dates = None
+        try:
+            # MDModalDatePicker.get_date() returns a list of selected dates;
+            # for a range selection this list contains two dates (start and
+            # end).  If only one date is selected the list contains a
+            # single element.
+            dates = instance_date_picker.get_date()  # type: ignore
+        except Exception:
+            dates = None
+        if not dates:
+            return
+        # Ensure dates is a list and assign start/end accordingly
+        if isinstance(dates, list):
+            start = dates[0]
+            end = dates[-1]
+        else:
+            start = dates
+            end = dates
+        # Swap if reversed
+        if start and end and start > end:
+            start, end = end, start
+        self.start_date = start
+        self.end_date = end
+        self.load_summary()
 
     def _on_date_save(self, instance, value, date_range):
         """
