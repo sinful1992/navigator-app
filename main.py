@@ -1,3 +1,7 @@
+try:
+    import force_imports
+except:
+    pass
 from kivymd.app import MDApp
 from kivymd.uix.screen import MDScreen
 from kivymd.uix.screenmanager import MDScreenManager
