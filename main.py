@@ -1,7 +1,3 @@
-try:
-    import force_imports
-except:
-    pass
 from kivymd.app import MDApp
 from kivymd.uix.screen import MDScreen
 from kivymd.uix.screenmanager import MDScreenManager
@@ -250,7 +246,7 @@ class AddressCard(MDCard):
         self.address_text = address
         self.lat = lat
         self.lng = lng
-        prefix = "◯ " if status_info.get('is_active') else ""
+        prefix = "â—¯ " if status_info.get('is_active') else ""
         self.address_label.text = f"{prefix}{index + 1}. {address}"
         self._update_appearance(status_info)
         self._update_buttons(status_info, callbacks)
@@ -268,7 +264,7 @@ class AddressCard(MDCard):
             if outcome == "PIF":
                 self.md_bg_color = (0.92, 1.0, 0.92, 1.0)
                 amount = completion.get('amount', '')
-                self.status_label.text = f"PIF £{amount}" if amount else "PIF"
+                self.status_label.text = f"PIF Â£{amount}" if amount else "PIF"
                 self.status_label.text_color = [0, 0.7, 0, 1]
             elif outcome == "DA":
                 self.md_bg_color = (1.0, 0.96, 0.96, 1.0)
@@ -617,7 +613,7 @@ class MainScreen(MDScreen):
         self._payment_dialog.open()
 
     def _create_payment_dialog(self):
-        self._payment_field = MDTextField(hint_text="Amount (£)", size_hint_x=None, width=dp(200), input_filter="float", halign="center")
+        self._payment_field = MDTextField(hint_text="Amount (Â£)", size_hint_x=None, width=dp(200), input_filter="float", halign="center")
         content = MDBoxLayout(orientation='vertical', spacing=dp(12), adaptive_height=True)
         content.add_widget(self._payment_field)
         self._payment_dialog = MDDialog(title="Payment Amount", type="custom", content_cls=content, buttons=[
@@ -762,7 +758,7 @@ class MainScreen(MDScreen):
                 start_str = start_time.strftime('%H:%M')
             except Exception:
                 start_str = "--:--"
-            self.day_status_label.text = f"Day started: {start_str} • Completed: {completed_today}"
+            self.day_status_label.text = f"Day started: {start_str} â€¢ Completed: {completed_today}"
             Animation(opacity=1, height=dp(40), duration=0.3).start(self.day_status_card)
         else:
             Animation(opacity=0, height=dp(0), duration=0.3).start(self.day_status_card)
@@ -867,7 +863,7 @@ class MainScreen(MDScreen):
         msg = f"History: {total_days} days, {total_sessions} sessions"
         if self.current_day_data:
             current_completed = len(self.current_day_data['addresses_completed'])
-            msg += f" • Today: {current_completed} completed"
+            msg += f" â€¢ Today: {current_completed} completed"
         toast(msg)
         try:
             if hasattr(self, '_day_dialog') and self._day_dialog:
@@ -1192,7 +1188,7 @@ class DayDetailsScreen(MDScreen):
             time_text = ts or "Unknown"
         time_label = MDLabel(text=time_text, theme_text_color="Secondary", font_size='11sp')
         amount_text = item['completion'].get('amount', '')
-        amount_label = MDLabel(text=f"£{amount_text}" if amount_text else "", theme_text_color="Secondary", font_size='11sp')
+        amount_label = MDLabel(text=f"Â£{amount_text}" if amount_text else "", theme_text_color="Secondary", font_size='11sp')
         layout.add_widget(top_row)
         info_row = MDBoxLayout(orientation='horizontal')
         info_row.add_widget(time_label)
@@ -1277,7 +1273,7 @@ class RangeDetailsScreen(MDScreen):
         amount = comp.get('amount', '')
         outcome_text = outcome
         if outcome == 'PIF' and amount:
-            outcome_text += f" £{amount}"
+            outcome_text += f" Â£{amount}"
         ts = comp.get('timestamp', '')
         time_str = ""
         if ts:
@@ -1317,6 +1313,19 @@ class CompletedSummaryScreen(MDScreen):
         self.name = "completed_summary"
         self.start_date = None
         self.end_date = None
+        # Attributes used when falling back to older date picker APIs. For
+        # KivyMD versions prior to 1.1.0 the date picker requires a
+        # callback and does not support range selection. We use these
+        # attributes to coordinate sequential date selection for start and
+        # end dates.
+        self._old_datepicker_start = None
+        self._old_datepicker_end = None
+        # Retain manual entry dialog attributes in case they are needed by
+        # future updates or other components, but the calendar fallback is
+        # preferred and manual entry will not be triggered automatically.
+        self._date_input_dialog = None
+        self._start_date_field = None
+        self._end_date_field = None
         self._setup_ui()
 
     def _setup_ui(self):
@@ -1341,26 +1350,224 @@ class CompletedSummaryScreen(MDScreen):
             self.manager.current = 'main_screen'
 
     def open_date_picker(self):
-        MDDatePicker = None
+        """
+        Attempt to open the KivyMD date picker. This method gracefully
+        degrades to a manual date entry dialog when the date picker class
+        cannot be imported or instantiated. On very old versions of
+        KivyMD the MDDatePicker requires a callback argument and does not
+        support the ``mode`` keyword. Newer versions support a range
+        selection via the ``mode="range"`` parameter and expose
+        ``on_save`` and ``on_cancel`` events. We try the modern API first
+        and fall back to a manual text entry dialog if anything fails.
+        """
+        # Attempt to import the MDDatePicker from the possible module paths.
         try:
             from kivymd.uix.picker import MDDatePicker  # type: ignore
         except Exception:
             try:
                 from kivymd.uix.pickers import MDDatePicker  # type: ignore
             except Exception:
-                MDDatePicker = None
-        if MDDatePicker is None:
+                MDDatePicker = None  # type: ignore
+        # If we cannot import the class at all, display a toast and return.
+        if not MDDatePicker:
             toast("Date picker not available")
             return
-        picker = MDDatePicker(mode="range")
-        picker.bind(on_save=self._on_date_save, on_cancel=lambda *a: None)
-        picker.open()
+        # Try the modern API with mode="range" and on_save binding. If it
+        # raises a TypeError (unknown keyword) or AttributeError (missing
+        # on_save), we fall back to a sequential calendar selection for
+        # older versions.
+        try:
+            picker = MDDatePicker(mode="range")  # type: ignore
+            picker.bind(on_save=self._on_date_save, on_cancel=lambda *a: None)
+            picker.open()
+        except Exception:
+            # On older versions the MDDatePicker constructor requires a
+            # callback argument and does not support range selection. We
+            # guide the user through selecting a start date followed by an
+            # end date using two sequential pickers.
+            self._start_old_datepicker_sequence(MDDatePicker)
 
     def _on_date_save(self, instance, value, date_range):
-        if not date_range:
+        """
+        Handler for the date picker's ``on_save`` event. The signature
+        varies slightly between KivyMD versions but generally provides
+        the selected date as ``value`` and an optional list of dates
+        when a range is chosen. To support both single-date and
+        range selections we check for a non-empty ``date_range`` and
+        fall back to the single ``value`` when necessary.
+
+        :param instance: the date picker instance
+        :param value: the selected date as a ``datetime.date``
+        :param date_range: a list of ``datetime.date`` objects when a range is
+            selected, or ``None``/empty when only a single date was picked.
+        """
+        # Determine the start and end based on the provided arguments. When
+        # selecting a range the picker returns a list of dates; when
+        # selecting a single date the range may be empty or ``None``. In
+        # that case fall back to the ``value`` argument for both start
+        # and end.
+        start = None
+        end = None
+        try:
+            if date_range:
+                # Range selection: take the first and last entries
+                start = date_range[0]
+                end = date_range[-1]
+            elif value:
+                # Single date: use the value for both start and end
+                start = value
+                end = value
+        except Exception:
+            # In unexpected circumstances fall back to using the value
+            start = value
+            end = value
+        if not start or not end:
+            # Nothing selected; do not update the summary
             return
-        self.start_date = date_range[0]
-        self.end_date = date_range[-1]
+        self.start_date = start
+        self.end_date = end
+        # Dismiss any open fallback dialog when using the date picker
+        if self._date_input_dialog and self._date_input_dialog.is_open:
+            self._date_input_dialog.dismiss()
+        self.load_summary()
+
+    def _start_old_datepicker_sequence(self, MDDatePicker):
+        """
+        Begin a sequential date selection process for KivyMD versions that
+        do not support the ``mode`` keyword. The user will first
+        select a start date. Once selected, another date picker will
+        prompt for the end date.
+
+        :param MDDatePicker: The imported MDDatePicker class.
+        """
+        # Reset any previous values
+        self._old_datepicker_start = None
+        self._old_datepicker_end = None
+        # Open the first picker for the start date
+        try:
+            picker = MDDatePicker(callback=lambda date: self._on_old_date_start(date, MDDatePicker))  # type: ignore
+            picker.open()
+        except Exception:
+            toast("Date picker not available")
+
+    def _on_old_date_start(self, date, MDDatePicker):
+        """
+        Callback for the first picker in the sequential selection.
+        Stores the start date and opens a second picker for the end date.
+
+        :param date: The selected start date.
+        :param MDDatePicker: The imported MDDatePicker class to use for the
+            second picker.
+        """
+        self.start_date = date
+        self._old_datepicker_start = date
+        # After selecting the start date, prompt the user for the end date
+        try:
+            picker = MDDatePicker(callback=lambda end_date: self._on_old_date_end(end_date))  # type: ignore
+            picker.open()
+        except Exception:
+            toast("Date picker not available")
+
+    def _on_old_date_end(self, date):
+        """
+        Callback for the second picker in the sequential selection.
+        Stores the end date, adjusts order if necessary, and loads
+        the summary.
+
+        :param date: The selected end date.
+        """
+        self.end_date = date
+        self._old_datepicker_end = date
+        # Ensure start_date and end_date are in correct order
+        if self.start_date and self.end_date and self.start_date > self.end_date:
+            self.start_date, self.end_date = self.end_date, self.start_date
+        # Load the summary now that both dates are selected
+        self.load_summary()
+
+    def _open_date_input_dialog(self):
+        """
+        Create and open a manual date input dialog. This fallback dialog
+        prompts the user to enter start and end dates in YYYY-MM-DD
+        format. On confirmation the dates are validated and, if valid,
+        assigned to ``self.start_date`` and ``self.end_date`` before
+        loading the summary. If the user enters an invalid format a toast
+        message is shown and the dialog remains open.
+        """
+        # Lazily build the dialog the first time it is needed
+        if not self._date_input_dialog:
+            # Create text fields for start and end dates
+            self._start_date_field = MDTextField(
+                hint_text="Start date (YYYY-MM-DD)",
+                size_hint_x=None,
+                width=dp(250),
+                helper_text="Format: YYYY-MM-DD",
+                helper_text_mode="on_focus",
+                halign="center",
+            )
+            self._end_date_field = MDTextField(
+                hint_text="End date (YYYY-MM-DD)",
+                size_hint_x=None,
+                width=dp(250),
+                helper_text="Format: YYYY-MM-DD",
+                helper_text_mode="on_focus",
+                halign="center",
+            )
+            # Build content layout
+            content = MDBoxLayout(
+                orientation='vertical',
+                spacing=dp(12),
+                adaptive_height=True,
+                padding=[dp(12), dp(12), dp(12), dp(12)],
+            )
+            content.add_widget(self._start_date_field)
+            content.add_widget(self._end_date_field)
+            # Create the dialog
+            self._date_input_dialog = MDDialog(
+                title="Enter Date Range",
+                type="custom",
+                content_cls=content,
+                buttons=[
+                    MDFlatButton(
+                        text="Cancel",
+                        on_release=lambda x: self._date_input_dialog.dismiss(),
+                    ),
+                    MDFlatButton(
+                        text="Confirm",
+                        theme_text_color="Custom",
+                        text_color=[0, 0.7, 0, 1],
+                        on_release=lambda x: self._on_date_input_confirm(),
+                    ),
+                ],
+            )
+        # Reset the fields each time the dialog is opened
+        self._start_date_field.text = ""
+        self._end_date_field.text = ""
+        self._date_input_dialog.open()
+
+    def _on_date_input_confirm(self):
+        """
+        Confirm handler for the manual date input dialog. Parses the
+        entered start and end dates and validates them. If parsing
+        succeeds the dates are assigned and the summary loaded. If
+        parsing fails a toast message is displayed and the dialog is
+        left open for correction.
+        """
+        start_text = self._start_date_field.text.strip()
+        end_text = self._end_date_field.text.strip()
+        try:
+            # Parse dates in ISO format (YYYY-MM-DD)
+            start_dt = datetime.strptime(start_text, "%Y-%m-%d").date()
+            end_dt = datetime.strptime(end_text, "%Y-%m-%d").date()
+            # Swap if the dates are reversed
+            if start_dt > end_dt:
+                start_dt, end_dt = end_dt, start_dt
+        except Exception:
+            toast("Invalid date format. Use YYYY-MM-DD")
+            return
+        self.start_date = start_dt
+        self.end_date = end_dt
+        # Dismiss the dialog and load summary
+        self._date_input_dialog.dismiss()
         self.load_summary()
 
     def load_summary(self):
@@ -1593,7 +1800,7 @@ class CompletedSummaryScreen(MDScreen):
                             addr = item['address']
                             out = comp.get('outcome', 'Done')
                             amt = comp.get('amount', '')
-                            outcome_text = out if out != 'PIF' or not amt else f"{out} £{amt}"
+                            outcome_text = out if out != 'PIF' or not amt else f"{out} Â£{amt}"
                             ts = comp.get('timestamp', '')
                             lat = item.get('lat', '')
                             lng = item.get('lng', '')
