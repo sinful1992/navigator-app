@@ -246,7 +246,7 @@ class AddressCard(MDCard):
         self.address_text = address
         self.lat = lat
         self.lng = lng
-        prefix = "â—¯ " if status_info.get('is_active') else ""
+        prefix = "◯ " if status_info.get('is_active') else ""
         self.address_label.text = f"{prefix}{index + 1}. {address}"
         self._update_appearance(status_info)
         self._update_buttons(status_info, callbacks)
@@ -264,7 +264,7 @@ class AddressCard(MDCard):
             if outcome == "PIF":
                 self.md_bg_color = (0.92, 1.0, 0.92, 1.0)
                 amount = completion.get('amount', '')
-                self.status_label.text = f"PIF Â£{amount}" if amount else "PIF"
+                self.status_label.text = f"PIF £{amount}" if amount else "PIF"
                 self.status_label.text_color = [0, 0.7, 0, 1]
             elif outcome == "DA":
                 self.md_bg_color = (1.0, 0.96, 0.96, 1.0)
@@ -613,7 +613,7 @@ class MainScreen(MDScreen):
         self._payment_dialog.open()
 
     def _create_payment_dialog(self):
-        self._payment_field = MDTextField(hint_text="Amount (Â£)", size_hint_x=None, width=dp(200), input_filter="float", halign="center")
+        self._payment_field = MDTextField(hint_text="Amount (£)", size_hint_x=None, width=dp(200), input_filter="float", halign="center")
         content = MDBoxLayout(orientation='vertical', spacing=dp(12), adaptive_height=True)
         content.add_widget(self._payment_field)
         self._payment_dialog = MDDialog(title="Payment Amount", type="custom", content_cls=content, buttons=[
@@ -758,7 +758,7 @@ class MainScreen(MDScreen):
                 start_str = start_time.strftime('%H:%M')
             except Exception:
                 start_str = "--:--"
-            self.day_status_label.text = f"Day started: {start_str} â€¢ Completed: {completed_today}"
+            self.day_status_label.text = f"Day started: {start_str} • Completed: {completed_today}"
             Animation(opacity=1, height=dp(40), duration=0.3).start(self.day_status_card)
         else:
             Animation(opacity=0, height=dp(0), duration=0.3).start(self.day_status_card)
@@ -863,7 +863,7 @@ class MainScreen(MDScreen):
         msg = f"History: {total_days} days, {total_sessions} sessions"
         if self.current_day_data:
             current_completed = len(self.current_day_data['addresses_completed'])
-            msg += f" â€¢ Today: {current_completed} completed"
+            msg += f" • Today: {current_completed} completed"
         toast(msg)
         try:
             if hasattr(self, '_day_dialog') and self._day_dialog:
@@ -1188,7 +1188,7 @@ class DayDetailsScreen(MDScreen):
             time_text = ts or "Unknown"
         time_label = MDLabel(text=time_text, theme_text_color="Secondary", font_size='11sp')
         amount_text = item['completion'].get('amount', '')
-        amount_label = MDLabel(text=f"Â£{amount_text}" if amount_text else "", theme_text_color="Secondary", font_size='11sp')
+        amount_label = MDLabel(text=f"£{amount_text}" if amount_text else "", theme_text_color="Secondary", font_size='11sp')
         layout.add_widget(top_row)
         info_row = MDBoxLayout(orientation='horizontal')
         info_row.add_widget(time_label)
@@ -1273,7 +1273,7 @@ class RangeDetailsScreen(MDScreen):
         amount = comp.get('amount', '')
         outcome_text = outcome
         if outcome == 'PIF' and amount:
-            outcome_text += f" Â£{amount}"
+            outcome_text += f" £{amount}"
         ts = comp.get('timestamp', '')
         time_str = ""
         if ts:
@@ -1351,14 +1351,21 @@ class CompletedSummaryScreen(MDScreen):
 
     def open_date_picker(self):
         """
-        Attempt to open the KivyMD date picker. This method gracefully
-        degrades to a manual date entry dialog when the date picker class
-        cannot be imported or instantiated. On very old versions of
-        KivyMD the MDDatePicker requires a callback argument and does not
-        support the ``mode`` keyword. Newer versions support a range
-        selection via the ``mode="range"`` parameter and expose
-        ``on_save`` and ``on_cancel`` events. We try the modern API first
-        and fall back to a manual text entry dialog if anything fails.
+        Attempt to open the KivyMD date picker.  On recent versions of
+        KivyMD (e.g. 1.1.0 and later) the ``MDDatePicker`` supports the
+        ``mode="range"`` keyword and emits an ``on_save`` event when the
+        user confirms their selection.  For these versions we bind the
+        ``on_save`` callback to :meth:`_on_date_save` and present a
+        single dialog that lets the user pick a start and end date.
+
+        Older KivyMD releases (notably 0.104.x) expose ``MDDatePicker``
+        under a different module and require a ``callback`` argument
+        instead of ``on_save``.  They also do not support range selection.
+        In this case we transparently guide the user through two
+        sequential calendar dialogs—first selecting a start date and then
+        an end date via :meth:`_start_old_datepicker_sequence`.  The
+        manual text entry fallback remains available internally for
+        developers but is no longer triggered automatically.
         """
         # Attempt to import the MDDatePicker from the possible module paths.
         try:
@@ -1800,7 +1807,7 @@ class CompletedSummaryScreen(MDScreen):
                             addr = item['address']
                             out = comp.get('outcome', 'Done')
                             amt = comp.get('amount', '')
-                            outcome_text = out if out != 'PIF' or not amt else f"{out} Â£{amt}"
+                            outcome_text = out if out != 'PIF' or not amt else f"{out} £{amt}"
                             ts = comp.get('timestamp', '')
                             lat = item.get('lat', '')
                             lng = item.get('lng', '')
