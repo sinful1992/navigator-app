@@ -9,7 +9,9 @@ version = 1.0.2
 
 # Enhanced requirements - explicit KivyMD components and dependencies
 # Use KivyMD 2.x (master/dev)
-requirements = python3,kivy==2.3.0,"kivymd @ git+https://github.com/kivymd/KivyMD@master",androidstorage4kivy,pyjnius,openpyxl==3.1.2,et_xmlfile==1.1.0,python-dateutil,babel,pytz
+requirements = python3,kivy==2.3.0,kivymd,androidstorage4kivy,pyjnius,openpyxl==3.1.2,et_xmlfile==1.1.0,python-dateutil,babel,pytz
+
+requirements.source.kivymd = https://github.com/kivymd/KivyMD/archive/refs/heads/master.zip
 
 # Ensure pip doesn’t reuse an old cached 1.x
 pip_options = --no-cache-dir
@@ -45,7 +47,6 @@ android.p4a_whitelist = sqlite3,json,datetime,calendar,dateutil,babel.dates,kivy
 
 # Ensure all KivyMD assets are included
 android.add_src = assets
-android.add_aars = 
 
 # Optional branding (uncomment and provide files if you have them)
 # icon.filename = %(source.dir)s/icon.png
@@ -71,4 +72,3 @@ ndk_version = 25b
 
 # Additional recipe arguments to ensure all dependencies
 recipe_args = --with-sqlite3
-private_dependencies = kivymd.uix.pickers.datepicker
